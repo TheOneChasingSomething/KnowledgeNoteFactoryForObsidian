@@ -47,11 +47,17 @@ Palette command: **"Create a resource note"**, meant to archive a source (LLM co
 2. **Automatic tags**: fixed tags (`literature-note`, `ressources-note`, `resource`, `resource-note`) + subject extracted from the knowledge-index (e.g. `{{ GIT }}` → `Git`) + configurable keywords detected in the title and content (Git, TLS, SSH, MITM, Docker…), deduplicated.
 3. The link `- [[Author - Title]]` is inserted **into the project note under `Ressources` > `LLM`** and **into the index note under `LLM`** (both heading chains configurable in the settings), grouped after the last bullet by the same author (grouping distinguishes `Claude` from `ClaudeIA` via word boundaries). Since v1.2, section titles are matched **tolerantly**: ATX headings (`## LLM`), standalone bold lines (`**LLM**`) and bare text lines (`LLM`) are all recognized, an optional suffix is accepted (`## LLM :`), and if the parent heading (`Ressources`) is absent the plugin **falls back to the final title found anywhere in the note** — headings are only created when nothing matches at all. An existing link is never duplicated.
 
-## 4. Settings panel
+## 4. Project and task notes (v1.3)
 
-Everything is configurable under **Settings → Knowledge Note Factory**: template folder, identifier and date formats, defaults of the `project` block, and — for each of the six types — default activation, destination folder and template name. **Resource notes** section: inbox folder (`0_inbox`), projects folder scanned by the dropdown (`1_Projects` by default — adjust to your vault), optional resource template, default TrustLevel, author list, tag-generating keywords and fixed tags.
+**"Create a project note".** The modal asks for a title, a short name (`project.name`, defaulting to the title without spaces), and the `parent` / `status` / `type` fields. The note is created in the projects folder as `<id> - ~~ Title ~~` with the frontmatter `tags: project-note` + `project` block (name/parent/status/type), and — when no project template is configured — a built-in body skeleton: `Objectifs`, `Liste des tâches`, `Notes`, `LLM`. Since it lands in the projects folder, the new project immediately appears in the resource and task dropdowns.
 
-## 5. Known limitations
+**"Create a task note".** The modal asks for a title, the **project** (dropdown), `status` and `type`. The note is created in the tasks folder as `<id> - Title` (no decoration) with the frontmatter `tags: Task-Note`, an empty `production:` key and a `task` block whose `project` field is read from the selected project note's own frontmatter (`project.name`, via the metadata cache — falling back to its undecorated title). The link `- [[<id> - Title]]` is then inserted **into the project note under `Liste des tâches`** (configurable heading, same tolerant matching and grouping engine as resource links).
+
+## 5. Settings panel
+
+Everything is configurable under **Settings → Knowledge Note Factory**: **Projects & tasks** section (project template, task-list heading, tasks folder, task template), template folder, identifier and date formats, defaults of the `project` block, and — for each of the six types — default activation, destination folder and template name. **Resource notes** section: inbox folder (`0_inbox`), projects folder scanned by the dropdown (`1_Projects` by default — adjust to your vault), optional resource template, default TrustLevel, author list, tag-generating keywords and fixed tags.
+
+## 6. Known limitations
 
 1. **File-name characters.** The `"" ""` and `** **` decorations contain characters (`"`, `*`) forbidden by the Windows file system (reserved by the Win32 API)¹. On Linux/macOS the scheme works as is; for a vault synced with Windows, enable **"Sanitize file names"**, which substitutes the full-width Unicode equivalents `＊` and `＂`.
 2. **Templater syntax.** The plugin inserts raw template content: Templater tags (`<% ... %>`) are **not** executed². The tokens listed above (inspired by the core *Templates* plugin³) cover the required substitutions; existing templates remain usable as long as their dynamic fields are limited to the frontmatter, which the plugin regenerates anyway.

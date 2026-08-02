@@ -34,6 +34,7 @@ function decorate(type, name) {
     case 'gist':       return '@@ ' + name + ' @@';
     case 'slides':     return '** ' + name + ' **';
     case 'groom':      return ';; ' + name + ' ;;';
+    case 'project':    return '~~ ' + name + ' ~~';
     default:           return name;
   }
 }
@@ -161,6 +162,39 @@ function resourceFrontmatter(ctx) {
   return lines;
 }
 
+var PROJECT_KEYS = ['rédaction', 'tags', 'project'];
+
+function projectNoteFrontmatter(ctx) {
+  var lines = [];
+  lines.push('rédaction: ' + ctx.today);
+  lines.push('tags:');
+  lines.push('  - project-note');
+  lines.push('project:');
+  lines.push('  name: ' + (ctx.name || ''));
+  lines.push('  parent: ' + (ctx.parent || 'None'));
+  lines.push('  status: ' + (ctx.status || 'Pending'));
+  lines.push('  type: ' + (ctx.type || ''));
+  return lines;
+}
+
+var TASK_KEYS = ['rédaction', 'tags', 'production', 'task'];
+
+function taskNoteFrontmatter(ctx) {
+  var lines = [];
+  lines.push('rédaction: ' + ctx.today);
+  lines.push('tags:');
+  lines.push('  - Task-Note');
+  lines.push('production:');
+  lines.push('task:');
+  lines.push('  project: ' + (ctx.project || ''));
+  lines.push('  status: ' + (ctx.status || 'Pending'));
+  lines.push('  type: ' + (ctx.type || ''));
+  return lines;
+}
+
+/* Built-in project body when no template is configured. */
+var PROJECT_BODY_SKELETON = '## Objectifs\n\n## Liste des tâches\n\n## Notes\n\n## LLM\n';
+
 /* Walks the heading chain and returns how far it matched, plus the scope
  * [start, end) of the deepest matched heading and its level/kind. */
 function findChain(lines, chain) {
@@ -263,7 +297,12 @@ function insertIntoSection(content, bullet, chain, author) {
     pos = sec.start;
     while (pos < sec.end && lines[pos].trim() === '') pos++;
   }
-  lines.splice(pos, 0, bullet);
+  var insertArr = [bullet];
+  var following = lines[pos];
+  if (following !== undefined && following.trim() !== '' && !/^\s*[-*+]\s+/.test(following)) {
+    insertArr.push('');
+  }
+  Array.prototype.splice.apply(lines, [pos, 0].concat(insertArr));
   return lines.join('\n');
 }
 
@@ -286,6 +325,14 @@ var DEFAULT_SETTINGS = {
     indexChain: 'LLM',
     keywords: 'Git, GitHub, GitLab, TLS, HTTPS, SSH, MITM, CTF, Docker, Python, JavaScript, V8, Linux, Obsidian',
     fixedTags: 'literature-note, ressources-note, resource, resource-note'
+  },
+  project: {
+    template: '',
+    taskSection: 'Liste des tâches'
+  },
+  task: {
+    folder: '2_Tasks',
+    template: ''
   },
   types: {
     index:      { folder: '5_Knowledges/0 - Index',      template: 'index-note_template',      enabled: true },
@@ -650,6 +697,176 @@ var CreateResourceModal = /** @class */ (function (_super) {
 })(obsidian.Modal);
 
 /* ------------------------------------------------------------------ */
+/* Project note creation modal                                         */
+/* ------------------------------------------------------------------ */
+
+var CreateProjectModal = /** @class */ (function (_super) {
+  function CreateProjectModal(app, plugin) {
+    var _this = _super.call(this, app) || this;
+    _this.plugin = plugin;
+    _this.title = '';
+    _this.shortName = '';
+    _this.parent = plugin.settings.defaultParent;
+    _this.status = plugin.settings.defaultStatus;
+    _this.projectType = '';
+    return _this;
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(CreateProjectModal, _super);
+  CreateProjectModal.prototype = Object.create(_super.prototype);
+  CreateProjectModal.prototype.constructor = CreateProjectModal;
+
+  CreateProjectModal.prototype.onOpen = function () {
+    var self = this;
+    var contentEl = this.contentEl;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'New project note' });
+
+    new obsidian.Setting(contentEl)
+      .setName('Title')
+      .setDesc('Used in the note name: <id> - ~~ Title ~~')
+      .addText(function (t) {
+        t.setPlaceholder('Config IA pour CTF');
+        t.onChange(function (v) { self.title = v; });
+        t.inputEl.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') self.submit();
+        });
+        window.setTimeout(function () { t.inputEl.focus(); }, 10);
+      });
+
+    new obsidian.Setting(contentEl)
+      .setName('Short name')
+      .setDesc('project.name in the frontmatter (default: title without spaces)')
+      .addText(function (t) {
+        t.setPlaceholder('ConfigCTFAI');
+        t.onChange(function (v) { self.shortName = v.trim(); });
+      });
+
+    new obsidian.Setting(contentEl).setName('parent').addText(function (t) {
+      t.setValue(self.parent);
+      t.onChange(function (v) { self.parent = v.trim(); });
+    });
+    new obsidian.Setting(contentEl).setName('status').addText(function (t) {
+      t.setValue(self.status);
+      t.onChange(function (v) { self.status = v.trim(); });
+    });
+    new obsidian.Setting(contentEl).setName('type').addText(function (t) {
+      t.setPlaceholder('Config, Knowledge, Tooling…');
+      t.onChange(function (v) { self.projectType = v.trim(); });
+    });
+
+    new obsidian.Setting(contentEl).addButton(function (b) {
+      b.setButtonText('Create').setCta().onClick(function () { self.submit(); });
+    });
+  };
+
+  CreateProjectModal.prototype.submit = function () {
+    if (!this.title || !this.title.trim()) {
+      new obsidian.Notice('Please enter a title.');
+      return;
+    }
+    var title = this.title.trim();
+    var opts = {
+      title: title,
+      shortName: this.shortName || title.replace(/\s+/g, ''),
+      parent: this.parent || 'None',
+      status: this.status || 'Pending',
+      type: this.projectType
+    };
+    this.close();
+    this.plugin.createProject(opts);
+  };
+
+  CreateProjectModal.prototype.onClose = function () {
+    this.contentEl.empty();
+  };
+
+  return CreateProjectModal;
+})(obsidian.Modal);
+
+/* ------------------------------------------------------------------ */
+/* Task note creation modal                                            */
+/* ------------------------------------------------------------------ */
+
+var CreateTaskModal = /** @class */ (function (_super) {
+  function CreateTaskModal(app, plugin) {
+    var _this = _super.call(this, app) || this;
+    _this.plugin = plugin;
+    _this.title = '';
+    _this.projectPath = '';
+    _this.status = plugin.settings.defaultStatus;
+    _this.taskType = '';
+    return _this;
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(CreateTaskModal, _super);
+  CreateTaskModal.prototype = Object.create(_super.prototype);
+  CreateTaskModal.prototype.constructor = CreateTaskModal;
+
+  CreateTaskModal.prototype.onOpen = function () {
+    var self = this;
+    var contentEl = this.contentEl;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'New task note' });
+
+    new obsidian.Setting(contentEl)
+      .setName('Title')
+      .setDesc('Used in the note name: <id> - Title')
+      .addText(function (t) {
+        t.setPlaceholder('Prise en main de claude-code');
+        t.onChange(function (v) { self.title = v; });
+        t.inputEl.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') self.submit();
+        });
+        window.setTimeout(function () { t.inputEl.focus(); }, 10);
+      });
+
+    new obsidian.Setting(contentEl)
+      .setName('Project')
+      .setDesc('The task is linked under the project note (task.project = its short name)')
+      .addDropdown(function (d) {
+        d.addOption('', '— None —');
+        self.plugin.listNotesIn(self.plugin.settings.resource.projectFolder).forEach(function (f) {
+          d.addOption(f.path, f.basename);
+        });
+        d.onChange(function (v) { self.projectPath = v; });
+      });
+
+    new obsidian.Setting(contentEl).setName('status').addText(function (t) {
+      t.setValue(self.status);
+      t.onChange(function (v) { self.status = v.trim(); });
+    });
+    new obsidian.Setting(contentEl).setName('type').addText(function (t) {
+      t.setPlaceholder('Tooling, Research…');
+      t.onChange(function (v) { self.taskType = v.trim(); });
+    });
+
+    new obsidian.Setting(contentEl).addButton(function (b) {
+      b.setButtonText('Create').setCta().onClick(function () { self.submit(); });
+    });
+  };
+
+  CreateTaskModal.prototype.submit = function () {
+    if (!this.title || !this.title.trim()) {
+      new obsidian.Notice('Please enter a title.');
+      return;
+    }
+    var opts = {
+      title: this.title.trim(),
+      projectPath: this.projectPath,
+      status: this.status || 'Pending',
+      type: this.taskType
+    };
+    this.close();
+    this.plugin.createTask(opts);
+  };
+
+  CreateTaskModal.prototype.onClose = function () {
+    this.contentEl.empty();
+  };
+
+  return CreateTaskModal;
+})(obsidian.Modal);
+
+/* ------------------------------------------------------------------ */
 /* Settings tab                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -764,6 +981,52 @@ var FactorySettingTab = /** @class */ (function (_super) {
       });
     });
 
+    containerEl.createEl('h3', { text: 'Projects & tasks' });
+
+    new obsidian.Setting(containerEl)
+      .setName('Project template')
+      .setDesc('Template for project notes (empty: built-in skeleton Objectifs / Liste des tâches / Notes / LLM)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.project.template);
+        t.onChange(function (v) {
+          self.plugin.settings.project.template = v.trim();
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Task-list heading')
+      .setDesc("Heading in the project note where task links are inserted (chain separated by '>')")
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.project.taskSection);
+        t.onChange(function (v) {
+          self.plugin.settings.project.taskSection = v;
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Tasks folder')
+      .setDesc('Folder where task notes are created')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.task.folder);
+        t.onChange(function (v) {
+          self.plugin.settings.task.folder = v.trim();
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Task template')
+      .setDesc('Template for task notes (empty: none)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.task.template);
+        t.onChange(function (v) {
+          self.plugin.settings.task.template = v.trim();
+          self.plugin.saveSettings();
+        });
+      });
+
     containerEl.createEl('h3', { text: 'Note types' });
 
     TYPES.forEach(function (type) {
@@ -837,6 +1100,22 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       }
     });
 
+    this.addCommand({
+      id: 'create-project-note',
+      name: 'Create a project note',
+      callback: function () {
+        new CreateProjectModal(self.app, self).open();
+      }
+    });
+
+    this.addCommand({
+      id: 'create-task-note',
+      name: 'Create a task note',
+      callback: function () {
+        new CreateTaskModal(self.app, self).open();
+      }
+    });
+
     this.addRibbonIcon('library', 'Knowledge Note Factory', function () {
       new CreateKnowledgeModal(self.app, self).open();
     });
@@ -860,6 +1139,16 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       {},
       DEFAULT_SETTINGS.resource,
       stored.resource || {}
+    );
+    this.settings.project = Object.assign(
+      {},
+      DEFAULT_SETTINGS.project,
+      stored.project || {}
+    );
+    this.settings.task = Object.assign(
+      {},
+      DEFAULT_SETTINGS.task,
+      stored.task || {}
     );
   };
 
@@ -1047,6 +1336,119 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     if (indexFile) await this.insertResourceLink(indexFile, name, opts.author, indexChain);
 
     new obsidian.Notice('Resource note created: ' + name);
+    await this.app.workspace.getLeaf(false).openFile(file);
+  };
+
+  KnowledgeNoteFactory.prototype.createProject = async function (opts) {
+    var s = this.settings;
+    var id = window.moment().format(s.idFormat || 'YYYYMMDDHHmm');
+    var today = window.moment().format(s.dateFormat || 'YYYY-MM-DD');
+    var base = sanitizeBase(id + ' - ' + decorate('project', opts.title), s.sanitizeFileNames);
+
+    var folder = obsidian.normalizePath(s.resource.projectFolder);
+    await this.ensureFolder(folder);
+    var path = obsidian.normalizePath(folder + '/' + base + '.md');
+    if (this.app.vault.getAbstractFileByPath(path)) {
+      new obsidian.Notice('Already exists: ' + path);
+      return;
+    }
+
+    var tpl = s.project.template ? await this.loadTemplate(s.project.template) : null;
+    var split = splitTemplate(tpl || '');
+
+    var out = ['---'].concat(projectNoteFrontmatter({
+      today: today,
+      name: opts.shortName,
+      parent: opts.parent,
+      status: opts.status,
+      type: opts.type
+    }));
+    split.keys.forEach(function (block, key) {
+      if (PROJECT_KEYS.indexOf(key) === -1) out.push(block);
+    });
+    out.push('---');
+    out.push('');
+
+    var body = replacePlaceholders(split.body || '', {
+      id: id, today: today, name: opts.title, base: base, indexBase: base
+    });
+    if (!body.trim()) body = PROJECT_BODY_SKELETON;
+    if (!/^#\s/m.test(body)) body = '# ' + base + '\n\n' + body;
+
+    var file;
+    try {
+      file = await this.app.vault.create(path, out.join('\n') + body);
+    } catch (e) {
+      new obsidian.Notice('Creation failed: ' + path + ' — ' + e.message);
+      return;
+    }
+    new obsidian.Notice('Project note created: ' + base);
+    await this.app.workspace.getLeaf(false).openFile(file);
+  };
+
+  KnowledgeNoteFactory.prototype.createTask = async function (opts) {
+    var s = this.settings;
+    var id = window.moment().format(s.idFormat || 'YYYYMMDDHHmm');
+    var today = window.moment().format(s.dateFormat || 'YYYY-MM-DD');
+    var base = sanitizeBase(id + ' - ' + opts.title, s.sanitizeFileNames);
+
+    var folder = obsidian.normalizePath(s.task.folder);
+    await this.ensureFolder(folder);
+    var path = obsidian.normalizePath(folder + '/' + base + '.md');
+    if (this.app.vault.getAbstractFileByPath(path)) {
+      new obsidian.Notice('Already exists: ' + path);
+      return;
+    }
+
+    /* Short project name: frontmatter project.name of the selected project
+     * note (via the metadata cache), falling back to its undecorated title. */
+    var projectFile = opts.projectPath ? this.app.vault.getAbstractFileByPath(opts.projectPath) : null;
+    var shortName = '';
+    if (projectFile) {
+      var cache = this.app.metadataCache.getFileCache(projectFile);
+      var fm = cache && cache.frontmatter;
+      if (fm && fm.project && fm.project.name) shortName = String(fm.project.name);
+      if (!shortName) shortName = subjectFromBase(projectFile.basename);
+    }
+
+    var tpl = s.task.template ? await this.loadTemplate(s.task.template) : null;
+    var split = splitTemplate(tpl || '');
+
+    var out = ['---'].concat(taskNoteFrontmatter({
+      today: today,
+      project: shortName,
+      status: opts.status,
+      type: opts.type
+    }));
+    split.keys.forEach(function (block, key) {
+      if (TASK_KEYS.indexOf(key) === -1) out.push(block);
+    });
+    out.push('---');
+    out.push('');
+
+    var body = replacePlaceholders(split.body || '', {
+      id: id, today: today, name: opts.title, base: base,
+      indexBase: projectFile ? projectFile.basename : base
+    });
+    if (!/^#\s/m.test(body)) body = '# ' + base + '\n\n' + body;
+
+    var file;
+    try {
+      file = await this.app.vault.create(path, out.join('\n') + body);
+    } catch (e) {
+      new obsidian.Notice('Creation failed: ' + path + ' — ' + e.message);
+      return;
+    }
+
+    /* Backlink: task listed in the project note under its task section. */
+    if (projectFile) {
+      await this.insertResourceLink(
+        projectFile, base, null,
+        splitChain(s.project.taskSection, ['Liste des tâches'])
+      );
+    }
+
+    new obsidian.Notice('Task note created: ' + base);
     await this.app.workspace.getLeaf(false).openFile(file);
   };
 
