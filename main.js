@@ -58,6 +58,22 @@ function splitCsv(s) {
   return (s || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
 }
 
+/* "202604270829h - ~~ X ~~" -> "202604270829h" (first token before " - "). */
+function idFromBase(base) {
+  var m = String(base).match(/^(\S+)\s+-\s/);
+  return m ? m[1] : '';
+}
+
+/* 0 -> a, 25 -> z, 26 -> aa, … (bijective base 26). */
+function letterSuffix(n) {
+  var s = '';
+  do {
+    s = String.fromCharCode(97 + (n % 26)) + s;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return s;
+}
+
 /* "202601201033 - {{ GIT }}" -> "GIT" (strips the id and decorations). */
 function subjectFromBase(base) {
   var s = String(base).replace(/^\S+\s*-\s*/, '');
@@ -1302,6 +1318,28 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     }
   };
 
+  /* Child id derived from a parent id: a parent ending with a letter gets
+   * numeric suffixes (…h -> …h1, …h2), a parent ending with a digit gets
+   * letter suffixes (…5 -> …5a, …5b). Returns the first suffix not already
+   * used as the id token of an existing note. */
+  KnowledgeNoteFactory.prototype.nextChildId = function (parentId) {
+    var numeric = /[0-9]$/.test(parentId);
+    var used = {};
+    var files = this.app.vault.getMarkdownFiles();
+    for (var i = 0; i < files.length; i++) {
+      var tok = idFromBase(files[i].basename);
+      if (tok && tok.indexOf(parentId) === 0 && tok.length > parentId.length) {
+        used[tok] = true;
+      }
+    }
+    for (var n = 0; n < 10000; n++) {
+      var suffix = numeric ? letterSuffix(n) : String(n + 1);
+      var cand = parentId + suffix;
+      if (!used[cand]) return cand;
+    }
+    return parentId + '-' + window.moment().format('HHmmss');
+  };
+
   /* Resolves "[[Note]]", "[[Note|alias]]" or a bare name to a file, the way
    * Obsidian resolves link text; falls back to a case-insensitive basename match. */
   KnowledgeNoteFactory.prototype.resolveNote = function (text) {
@@ -1475,8 +1513,17 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
 
   KnowledgeNoteFactory.prototype.createTask = async function (opts) {
     var s = this.settings;
-    var id = window.moment().format(s.idFormat || 'YYYYMMDDHHmm');
     var today = window.moment().format(s.dateFormat || 'YYYY-MM-DD');
+
+    var projectFile = opts.projectPath ? this.app.vault.getAbstractFileByPath(opts.projectPath) : null;
+
+    /* Task id: derived from the project id (…h -> …h1, …5 -> …5a), falling
+     * back to a timestamp when no project is selected. */
+    var id;
+    var parentId = projectFile ? idFromBase(projectFile.basename) : '';
+    if (parentId) id = this.nextChildId(parentId);
+    else id = window.moment().format(s.idFormat || 'YYYYMMDDHHmm');
+
     var base = sanitizeBase(id + ' - ' + opts.title, s.sanitizeFileNames);
 
     var folder = obsidian.normalizePath(s.task.folder);
@@ -1489,7 +1536,6 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
 
     /* Short project name: frontmatter project.name of the selected project
      * note (via the metadata cache), falling back to its undecorated title. */
-    var projectFile = opts.projectPath ? this.app.vault.getAbstractFileByPath(opts.projectPath) : null;
     var shortName = '';
     if (projectFile) {
       var cache = this.app.metadataCache.getFileCache(projectFile);
