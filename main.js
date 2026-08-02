@@ -1102,14 +1102,17 @@ var ProjectStatusModal = /** @class */ (function (_super) {
     _this.status = 'Pending';
     _this.projectText = '';
 
-    /* Prefill with the active note when it looks like a project note. */
+    /* Prefill with the active note when it looks like a project or task. */
     var active = app.workspace.getActiveFile();
     if (active && active.extension === 'md') {
-      var folder = obsidian.normalizePath(plugin.settings.resource.projectFolder || '');
+      var pFolder = obsidian.normalizePath(plugin.settings.resource.projectFolder || '');
+      var tFolder = obsidian.normalizePath(plugin.settings.task.folder || '');
       var cache = app.metadataCache.getFileCache(active);
-      var isProject = (folder && active.path.indexOf(folder + '/') === 0) ||
-        (cache && cache.frontmatter && cache.frontmatter.project);
-      if (isProject) _this.projectText = active.basename;
+      var fm = cache && cache.frontmatter;
+      var looksRight = (pFolder && active.path.indexOf(pFolder + '/') === 0) ||
+        (tFolder && active.path.indexOf(tFolder + '/') === 0) ||
+        (fm && (fm.project || fm.task));
+      if (looksRight) _this.projectText = active.basename;
     }
     return _this;
   }
@@ -1121,11 +1124,11 @@ var ProjectStatusModal = /** @class */ (function (_super) {
     var self = this;
     var contentEl = this.contentEl;
     contentEl.empty();
-    contentEl.createEl('h2', { text: 'Project status' });
+    contentEl.createEl('h2', { text: 'Project / task status' });
 
     new obsidian.Setting(contentEl)
-      .setName('Project')
-      .setDesc('Type its name or [[…]], suggestions as in Obsidian')
+      .setName('Note')
+      .setDesc('Project or task note — type its name or [[…]], suggestions as in Obsidian')
       .addText(function (t) {
         t.setValue(self.projectText);
         t.setPlaceholder('[[202604270829h - ~~ Challenge MITM Https ~~]]');
@@ -1158,7 +1161,7 @@ var ProjectStatusModal = /** @class */ (function (_super) {
       return;
     }
     this.close();
-    this.plugin.setProjectStatus(file, this.status);
+    this.plugin.setNoteStatus(file, this.status);
   };
 
   ProjectStatusModal.prototype.onClose = function () {
@@ -1567,7 +1570,7 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
 
     this.addCommand({
       id: 'set-project-status',
-      name: 'Set project status (Pending / Pause)',
+      name: 'Set status — project or task (Pending / Pause)',
       callback: function () {
         new ProjectStatusModal(self.app, self).open();
       }
@@ -1862,16 +1865,52 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     return group;
   };
 
-  /* Sets project.status in the frontmatter and moves the project's bookmark
-   * into the group matching the status (Pending -> pendingGroup,
+  /* Sets the status in the frontmatter — task.status for a task note,
+   * project.status for a project note — and moves the note's bookmark into
+   * the group matching the status (Pending -> pendingGroup,
    * Pause -> pauseGroup), removing it from the other group. */
-  KnowledgeNoteFactory.prototype.setProjectStatus = async function (file, status) {
+  KnowledgeNoteFactory.prototype.setNoteStatus = async function (file, status) {
     var s = this.settings;
+
+    /* Kind detection: a task block or a Task-Note tag makes it a task;
+     * anything else is treated as a project. */
+    var cache = this.app.metadataCache.getFileCache(file);
+    var fm0 = cache && cache.frontmatter;
+    var isTask = false;
+    if (fm0) {
+      if (fm0.task && typeof fm0.task === 'object') {
+        isTask = true;
+      } else {
+        var tags0 = fm0.tags || fm0.Tags;
+        if (typeof tags0 === 'string') tags0 = [tags0];
+        if (Array.isArray(tags0)) {
+          for (var ti = 0; ti < tags0.length; ti++) {
+            if (String(tags0[ti]).trim().toLowerCase() === 'task-note') { isTask = true; break; }
+          }
+        }
+      }
+    }
 
     try {
       await this.app.fileManager.processFrontMatter(file, function (fm) {
-        if (!fm.project || typeof fm.project !== 'object') fm.project = {};
-        fm.project.status = status;
+        if (isTask) {
+          if (!fm.task || typeof fm.task !== 'object') fm.task = {};
+          fm.task.status = status;
+          /* Repair pollution left by earlier versions: a project block that
+           * only carries a status (or nothing) on a task note. */
+          if (fm.project && typeof fm.project === 'object') {
+            var keys = Object.keys(fm.project).filter(function (k) {
+              var v = fm.project[k];
+              return v !== null && v !== undefined && v !== '';
+            });
+            if (keys.length === 0 || (keys.length === 1 && keys[0] === 'status')) {
+              delete fm.project;
+            }
+          }
+        } else {
+          if (!fm.project || typeof fm.project !== 'object') fm.project = {};
+          fm.project.status = status;
+        }
       });
     } catch (e) {
       new obsidian.Notice('Frontmatter update failed: ' + e.message);
@@ -1909,7 +1948,7 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     if (typeof bk.trigger === 'function') bk.trigger('changed');
 
     new obsidian.Notice('"' + file.basename + '" → ' + status +
-      ' (bookmarked in "' + targetTitle + '")');
+      ' (' + (isTask ? 'task' : 'project') + ', bookmarked in "' + targetTitle + '")');
   };
 
   /* Child id derived from a parent id: a parent ending with a letter gets
