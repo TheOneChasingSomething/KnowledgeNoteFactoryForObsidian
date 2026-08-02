@@ -245,10 +245,18 @@ function resolveTerminal(video) {
  * string (expert, unquoted) or a list of safely quoted arguments, plus an
  * optional "exec <shell>" so the window stays open after the command ends. */
 function buildInnerCommand(video, opts) {
-  var inner = video.baseCommand || '';
-  if (opts && opts.rawArgs) {
+  opts = opts || {};
+  var base = opts.baseOverride || video.baseCommand || '';
+  var inner = '';
+  /* Google OAuth2: expose the client secrets to the script via YT_DL_SECRETS
+   * (the env-variable path from the script's own "No client secrets" hint). */
+  if (video.secretsFile && video.secretsFile.trim()) {
+    inner += 'export YT_DL_SECRETS=' + shellQuote(expandHome(video.secretsFile.trim())) + '; ';
+  }
+  inner += base;
+  if (opts.rawArgs) {
     inner += ' ' + opts.rawArgs;
-  } else if (opts && opts.args && opts.args.length) {
+  } else if (opts.args && opts.args.length) {
     for (var i = 0; i < opts.args.length; i++) inner += ' ' + shellQuote(opts.args[i]);
   }
   if (video.keepOpen) inner += '; exec ' + (video.shell || 'bash');
@@ -632,6 +640,9 @@ var DEFAULT_SETTINGS = {
   video: {
     workdir: '',
     baseCommand: 'source venv/bin/activate && python3 main.py',
+    secretsFile: '',
+    installCommand: 'python3 -m venv venv 2>/dev/null; source venv/bin/activate && (python3 -c "import yt_dlp, keyring, typer" 2>/dev/null && echo "Dependencies already installed." || (echo "Installing dependencies…" && pip install -e .))',
+    secretsSetupCommand: 'source venv/bin/activate && python3 -c "import keyring,glob,os; f=glob.glob(\'client_secrets*.json\'); (keyring.set_password(\'yt_playlist_dl\',\'client_secrets\',open(f[0]).read()) or print(\'Stored in keyring:\',f[0])) if f else print(\'client_secrets*.json introuvable dans\',os.getcwd())"',
     shell: 'bash',
     terminalPreset: 'gnome-terminal',
     terminalBin: '',
@@ -1655,6 +1666,31 @@ var FactorySettingTab = /** @class */ (function (_super) {
       });
 
     new obsidian.Setting(containerEl)
+      .setName('Google client secrets (YT_DL_SECRETS)')
+      .setDesc('Path to client_secrets.json; exported as YT_DL_SECRETS before each run (leave empty if you use the keyring)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.video.secretsFile);
+        t.setPlaceholder('~/…/client_secrets.json');
+        t.onChange(function (v) { self.plugin.settings.video.secretsFile = v.trim(); self.plugin.saveSettings(); });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Credentials setup command')
+      .setDesc('Command run by "store Google credentials (keyring)" — stores client_secrets.json into the system keyring')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.video.secretsSetupCommand);
+        t.onChange(function (v) { self.plugin.settings.video.secretsSetupCommand = v; self.plugin.saveSettings(); });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Install / check command')
+      .setDesc('Command run by "install / check dependencies" — creates the venv if needed and runs pip install -e . only when the libraries are missing')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.video.installCommand);
+        t.onChange(function (v) { self.plugin.settings.video.installCommand = v; self.plugin.saveSettings(); });
+      });
+
+    new obsidian.Setting(containerEl)
       .setName('Shell')
       .setDesc('Shell used to run the command (bash, zsh, sh…)')
       .addText(function (t) {
@@ -1858,6 +1894,36 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       checkCallback: function (checking) {
         if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
         if (!checking) self.runVideoFromClipboard();
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'video-store-credentials',
+      name: 'Video Notes Manager: store Google credentials (keyring)',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) self.runVideoManager({ baseOverride: self.settings.video.secretsSetupCommand });
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'video-revoke-credentials',
+      name: 'Video Notes Manager: revoke Google credentials',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) self.runVideoManager({ args: ['revoke'] });
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'video-install-deps',
+      name: 'Video Notes Manager: install / check dependencies',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) self.runVideoManager({ baseOverride: self.settings.video.installCommand });
         return true;
       }
     });
