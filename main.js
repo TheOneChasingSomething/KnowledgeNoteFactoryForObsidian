@@ -647,7 +647,11 @@ var DEFAULT_SETTINGS = {
     terminalPreset: 'gnome-terminal',
     terminalBin: '',
     terminalArgs: '',
-    keepOpen: true
+    keepOpen: true,
+    passVault: true,
+    flagProject: '--project',
+    flagIndex: '--knowledge-index',
+    flagVault: '--vault'
   },
   types: {
     index:      { folder: '5_Knowledges/0 - Index',      template: 'index-note_template',      enabled: true },
@@ -1351,6 +1355,125 @@ var NormalizeModal = /** @class */ (function (_super) {
 })(obsidian.Modal);
 
 /* ------------------------------------------------------------------ */
+/* Video Notes Manager — guided download modal                         */
+/* ------------------------------------------------------------------ */
+
+var VideoDownloadModal = /** @class */ (function (_super) {
+  function VideoDownloadModal(app, plugin) {
+    var _this = _super.call(this, app) || this;
+    _this.plugin = plugin;
+    _this.url = '';
+    _this.kind = 'auto';
+    _this.projectText = '';
+    _this.indexText = '';
+    return _this;
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(VideoDownloadModal, _super);
+  VideoDownloadModal.prototype = Object.create(_super.prototype);
+  VideoDownloadModal.prototype.constructor = VideoDownloadModal;
+
+  VideoDownloadModal.prototype.onOpen = async function () {
+    var self = this;
+    var contentEl = this.contentEl;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'Download — guided' });
+
+    /* Prefill URL from clipboard when it is a URL. */
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.readText) {
+        var clip = await navigator.clipboard.readText();
+        if (/^https?:\/\//i.test((clip || '').trim())) self.url = clip.trim();
+      }
+    } catch (e) { /* clipboard blocked */ }
+
+    new obsidian.Setting(contentEl)
+      .setName('URL')
+      .addText(function (t) {
+        t.setValue(self.url);
+        t.setPlaceholder('https://…');
+        t.onChange(function (v) { self.url = v.trim(); });
+        t.inputEl.style.width = '100%';
+        window.setTimeout(function () { t.inputEl.focus(); }, 10);
+      });
+
+    new obsidian.Setting(contentEl)
+      .setName('Type')
+      .addDropdown(function (d) {
+        d.addOption('auto', 'Auto (YouTube → video, else article)');
+        d.addOption('video', 'video');
+        d.addOption('article', 'article');
+        d.setValue(self.kind);
+        d.onChange(function (v) { self.kind = v; });
+      });
+
+    new obsidian.Setting(contentEl)
+      .setName('Project')
+      .setDesc('Passed to the script as ' + self.plugin.settings.video.flagProject + ' — type [[…]]')
+      .addText(function (t) {
+        t.setPlaceholder('[[project note]]');
+        t.onChange(function (v) { self.projectText = v; });
+        attachFileSuggest(self.app, t.inputEl, self.plugin.settings.resource.projectFolder, function (file) {
+          self.projectText = file.basename;
+        });
+      });
+
+    new obsidian.Setting(contentEl)
+      .setName('Knowledge-index')
+      .setDesc('Passed to the script as ' + self.plugin.settings.video.flagIndex + ' — type [[…]]')
+      .addText(function (t) {
+        t.setPlaceholder('[[index note]]');
+        t.onChange(function (v) { self.indexText = v; });
+        attachFileSuggest(self.app, t.inputEl, self.plugin.settings.types.index.folder, function (file) {
+          self.indexText = file.basename;
+        });
+      });
+
+    new obsidian.Setting(contentEl).addButton(function (b) {
+      b.setButtonText('Download in terminal').setCta().onClick(function () { self.submit(); });
+    });
+  };
+
+  VideoDownloadModal.prototype.submit = function () {
+    var v = this.plugin.settings.video;
+    if (!this.url) { new obsidian.Notice('Enter a URL.'); return; }
+
+    var kind = this.kind;
+    if (kind === 'auto') {
+      var c = classifyUrl(this.url);
+      kind = (c && c.kind === 'article') ? 'article' : 'video';
+    }
+
+    var args = ['download', kind, this.url];
+
+    var proj = this.plugin.resolveNote(this.projectText);
+    if (this.projectText && this.projectText.trim() && !proj) {
+      new obsidian.Notice('Project note not found: ' + this.projectText);
+    }
+    if (proj && v.flagProject) args.push(v.flagProject, proj.basename);
+
+    var idx = this.plugin.resolveNote(this.indexText);
+    if (this.indexText && this.indexText.trim() && !idx) {
+      new obsidian.Notice('Index note not found: ' + this.indexText);
+    }
+    if (idx && v.flagIndex) args.push(v.flagIndex, idx.basename);
+
+    if (v.passVault && v.flagVault) {
+      var base = this.plugin.vaultBasePath();
+      if (base) args.push(v.flagVault, base);
+    }
+
+    this.close();
+    this.plugin.runVideoManager({ args: args });
+  };
+
+  VideoDownloadModal.prototype.onClose = function () {
+    this.contentEl.empty();
+  };
+
+  return VideoDownloadModal;
+})(obsidian.Modal);
+
+/* ------------------------------------------------------------------ */
 /* Video Notes Manager — argument modal                                */
 /* ------------------------------------------------------------------ */
 
@@ -1733,6 +1856,24 @@ var FactorySettingTab = /** @class */ (function (_super) {
         tg.onChange(function (v) { self.plugin.settings.video.keepOpen = v; self.plugin.saveSettings(); });
       });
 
+    new obsidian.Setting(containerEl)
+      .setName('Pass vault path')
+      .setDesc('Append the vault flag with Obsidian\'s absolute vault path to guided downloads')
+      .addToggle(function (tg) {
+        tg.setValue(self.plugin.settings.video.passVault);
+        tg.onChange(function (v) { self.plugin.settings.video.passVault = v; self.plugin.saveSettings(); });
+      });
+
+    [['flagProject', 'Project flag'], ['flagIndex', 'Knowledge-index flag'], ['flagVault', 'Vault flag']].forEach(function (f) {
+      new obsidian.Setting(containerEl)
+        .setName(f[1])
+        .setDesc('CLI flag name your script expects (guided download); leave empty to omit')
+        .addText(function (t) {
+          t.setValue(self.plugin.settings.video[f[0]]);
+          t.onChange(function (v) { self.plugin.settings.video[f[0]] = v.trim(); self.plugin.saveSettings(); });
+        });
+    });
+
     containerEl.createEl('h3', { text: 'Note types' });
 
     TYPES.forEach(function (type) {
@@ -1884,6 +2025,16 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       checkCallback: function (checking) {
         if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
         if (!checking) new VideoRunModal(self.app, self).open();
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'video-download-guided',
+      name: 'Video Notes Manager: download (guided — project & index)',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) new VideoDownloadModal(self.app, self).open();
         return true;
       }
     });
@@ -2179,6 +2330,14 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       results.push({ file: files[i], changes: probe });
     }
     return results;
+  };
+
+  /* Absolute filesystem path of the vault (desktop FileSystemAdapter). */
+  KnowledgeNoteFactory.prototype.vaultBasePath = function () {
+    var a = this.app.vault.adapter;
+    if (a && typeof a.getBasePath === 'function') return a.getBasePath();
+    if (a && a.basePath) return a.basePath;
+    return '';
   };
 
   /* Launches the Video Notes Manager script in an external terminal.
