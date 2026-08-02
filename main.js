@@ -204,6 +204,80 @@ function removeBookmarkPath(group, path) {
   }
 }
 
+/* POSIX single-quote escaping: wraps in '...' and encodes embedded quotes. */
+function shellQuote(arg) {
+  return "'" + String(arg).replace(/'/g, "'\\''") + "'";
+}
+
+/* Expands a leading ~ to the user's home directory (Node has no shell here). */
+function expandHome(p) {
+  if (!p) return p;
+  var home = (typeof process !== 'undefined' && process.env &&
+    (process.env.HOME || process.env.USERPROFILE)) || '';
+  if (p === '~') return home || p;
+  if (p.indexOf('~/') === 0 && home) return home + p.slice(1);
+  return p;
+}
+
+/* Terminal emulator presets: bin + the flags that precede the command. */
+var TERMINAL_PRESETS = {
+  'gnome-terminal':     { bin: 'gnome-terminal',     args: ['--'] },
+  'konsole':            { bin: 'konsole',            args: ['-e'] },
+  'xfce4-terminal':     { bin: 'xfce4-terminal',     args: ['-x'] },
+  'xterm':              { bin: 'xterm',              args: ['-e'] },
+  'kitty':              { bin: 'kitty',              args: [] },
+  'alacritty':          { bin: 'alacritty',          args: ['-e'] },
+  'x-terminal-emulator':{ bin: 'x-terminal-emulator',args: ['-e'] }
+};
+
+/* Resolves the terminal bin + preceding args from settings (preset or custom). */
+function resolveTerminal(video) {
+  if (video.terminalPreset === 'custom') {
+    return {
+      bin: video.terminalBin || 'xterm',
+      args: (video.terminalArgs || '').split(/\s+/).filter(Boolean)
+    };
+  }
+  return TERMINAL_PRESETS[video.terminalPreset] || TERMINAL_PRESETS['xterm'];
+}
+
+/* Builds the inner shell line: base command, then either a raw argument
+ * string (expert, unquoted) or a list of safely quoted arguments, plus an
+ * optional "exec <shell>" so the window stays open after the command ends. */
+function buildInnerCommand(video, opts) {
+  var inner = video.baseCommand || '';
+  if (opts && opts.rawArgs) {
+    inner += ' ' + opts.rawArgs;
+  } else if (opts && opts.args && opts.args.length) {
+    for (var i = 0; i < opts.args.length; i++) inner += ' ' + shellQuote(opts.args[i]);
+  }
+  if (video.keepOpen) inner += '; exec ' + (video.shell || 'bash');
+  return inner;
+}
+
+/* Full spawn descriptor: { bin, args, cwd } for child_process.spawn. */
+function buildSpawnPlan(video, opts) {
+  var term = resolveTerminal(video);
+  var shell = video.shell || 'bash';
+  var inner = buildInnerCommand(video, opts);
+  return {
+    bin: term.bin,
+    args: term.args.concat([shell, '-lc', inner]),
+    cwd: expandHome(video.workdir || '') || undefined
+  };
+}
+
+/* Rough URL classification for the clipboard shortcut. */
+function classifyUrl(url) {
+  var u = String(url || '').trim();
+  if (!/^https?:\/\//i.test(u)) return null;
+  if (/(?:youtube\.com|youtu\.be)/i.test(u)) {
+    if (/[?&]list=/.test(u) && !/[?&]v=/.test(u)) return { kind: 'playlist', url: u };
+    return { kind: 'video', url: u };
+  }
+  return { kind: 'article', url: u };
+}
+
 /* Recursively collects every bookmark group whose title matches, ignoring
  * case and surrounding spaces — so "4 - InProgress" nested anywhere matches
  * a setting spelled "4 - inProgress". */
@@ -252,9 +326,11 @@ function parseTagMap(str) {
 }
 
 /* Computes (and, when apply=true, performs) frontmatter normalization:
- * statuses capitalized, types canonicalized, tags mapped to their English
- * form and case-insensitively deduplicated. Returns change descriptions. */
-function normalizeFrontmatter(fm, canons, tagMap, apply) {
+ * statuses capitalized, types canonicalized, tags removed (removeSet), then
+ * mapped to their English form and case-insensitively deduplicated. Returns
+ * change descriptions. removeSet is an optional map of lowercased tags to drop. */
+function normalizeFrontmatter(fm, canons, tagMap, apply, removeSet) {
+  removeSet = removeSet || {};
   var changes = [];
 
   function fixStatus(obj, key, label) {
@@ -297,6 +373,11 @@ function normalizeFrontmatter(fm, canons, tagMap, apply) {
       var trimmed = tag.trim();
       var mapped = tagMap[trimmed.toLowerCase()] || trimmed;
       var keyL = mapped.toLowerCase();
+      if (removeSet[keyL] || removeSet[trimmed.toLowerCase()]) {
+        changed = true;
+        changes.push(k + ': "' + tag + '" removed');
+        continue;
+      }
       if (seen[keyL]) {
         changed = true;
         changes.push(k + ': duplicate "' + tag + '" removed');
@@ -394,7 +475,7 @@ var TPL_FLASHCARD_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{inde
 var TPL_CHEATSHEET_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - cheatsheet-note\n---\n';
 var TPL_GIST_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - gist-note\n---\n\n## {{title}}\n';
 var TPL_PERMANENT_STARTER = '---\nrédaction: {{date}}\nImpactScore:\ntags:\n  - permanent-note\n---\n\n# {{title}}\n\nindex links :\n- \n';
-var TPL_RESOURCE_STARTER = '---\nAuthor: \nURL: \nPublication: {{date}}\nLecture: {{date}}\nProject: \nTask: \nKnowledge-index: \nTrustLevel: \ndownload:\nTags:\n  - literature-note\n  - resources-note\n  - resource\n  - resource-note\n---\n';
+var TPL_RESOURCE_STARTER = '---\nAuthor: \nURL: \nPublication: {{date}}\nLecture: {{date}}\nProject: \nTask: \nKnowledge-index: \nTrustLevel: \ndownload:\nTags:\n  - literature-note\n  - resource-note\n---\n';
 var TPL_PROJECT_STARTER = '---\nrédaction: {{date}}\ntags:\n  - project-note\nproject:\n  name: {{name}}\n  parent: None\n  status: Pending\n  type: \n---\n\n' + PROJECT_BODY_SKELETON;
 var TPL_TASK_STARTER = '---\nrédaction: {{date}}\ntags:\n  - Task-Note\nproduction:\ntask:\n  project: \n  status: Pending\n  type: \n---\n';
 
@@ -527,7 +608,7 @@ var DEFAULT_SETTINGS = {
     projectChain: 'Ressources > LLM',
     indexChain: 'LLM',
     keywords: 'Git, GitHub, GitLab, TLS, HTTPS, SSH, MITM, CTF, Docker, Python, JavaScript, V8, Linux, Obsidian',
-    fixedTags: 'literature-note, resources-note, resource, resource-note'
+    fixedTags: 'literature-note, resource-note'
   },
   project: {
     template: '',
@@ -545,7 +626,17 @@ var DEFAULT_SETTINGS = {
   },
   normalize: {
     types: 'Coding, VibeCoding, Challenge, Research, Knowledge, Config, Tooling',
-    tagMap: 'ressource=resource, ressources=resources, ressource-note=resource-note, ressources-note=resources-note'
+    tagMap: 'ressource=resource, ressources=resources, ressource-note=resource-note, ressources-note=resources-note',
+    tagRemove: 'resource, resources-note'
+  },
+  video: {
+    workdir: '',
+    baseCommand: 'source venv/bin/activate && python3 main.py',
+    shell: 'bash',
+    terminalPreset: 'gnome-terminal',
+    terminalBin: '',
+    terminalArgs: '',
+    keepOpen: true
   },
   types: {
     index:      { folder: '5_Knowledges/0 - Index',      template: 'index-note_template',      enabled: true },
@@ -1249,6 +1340,60 @@ var NormalizeModal = /** @class */ (function (_super) {
 })(obsidian.Modal);
 
 /* ------------------------------------------------------------------ */
+/* Video Notes Manager — argument modal                                */
+/* ------------------------------------------------------------------ */
+
+var VideoRunModal = /** @class */ (function (_super) {
+  function VideoRunModal(app, plugin) {
+    var _this = _super.call(this, app) || this;
+    _this.plugin = plugin;
+    _this.args = '';
+    return _this;
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(VideoRunModal, _super);
+  VideoRunModal.prototype = Object.create(_super.prototype);
+  VideoRunModal.prototype.constructor = VideoRunModal;
+
+  VideoRunModal.prototype.onOpen = function () {
+    var self = this;
+    var contentEl = this.contentEl;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'Video Notes Manager — run' });
+    contentEl.createEl('p', {
+      text: 'Arguments appended to "' + this.plugin.settings.video.baseCommand +
+        '". Example: download video "https://youtu.be/xxx"'
+    });
+
+    new obsidian.Setting(contentEl)
+      .setName('Arguments')
+      .addText(function (t) {
+        t.setPlaceholder('download video "URL"');
+        t.onChange(function (v) { self.args = v; });
+        t.inputEl.style.width = '100%';
+        t.inputEl.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') self.submit();
+        });
+        window.setTimeout(function () { t.inputEl.focus(); }, 10);
+      });
+
+    new obsidian.Setting(contentEl).addButton(function (b) {
+      b.setButtonText('Run in terminal').setCta().onClick(function () { self.submit(); });
+    });
+  };
+
+  VideoRunModal.prototype.submit = function () {
+    this.close();
+    this.plugin.runVideoManager({ rawArgs: this.args });
+  };
+
+  VideoRunModal.prototype.onClose = function () {
+    this.contentEl.empty();
+  };
+
+  return VideoRunModal;
+})(obsidian.Modal);
+
+/* ------------------------------------------------------------------ */
 /* Settings tab                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1479,6 +1624,79 @@ var FactorySettingTab = /** @class */ (function (_super) {
         });
       });
 
+    new obsidian.Setting(containerEl)
+      .setName('Tags to remove')
+      .setDesc('Comma-separated tags stripped from every note by Normalize (case-insensitive)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.normalize.tagRemove);
+        t.onChange(function (v) {
+          self.plugin.settings.normalize.tagRemove = v;
+          self.plugin.saveSettings();
+        });
+      });
+
+    containerEl.createEl('h3', { text: 'Video Notes Manager' });
+
+    new obsidian.Setting(containerEl)
+      .setName('Project folder')
+      .setDesc('Absolute path to the ObsidianVideoNotesManager repository (used as working directory)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.video.workdir);
+        t.setPlaceholder('~/git/ObsidianVideoNotesManager');
+        t.onChange(function (v) { self.plugin.settings.video.workdir = v.trim(); self.plugin.saveSettings(); });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Base command')
+      .setDesc('Shell command run inside the project folder; arguments are appended to it')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.video.baseCommand);
+        t.onChange(function (v) { self.plugin.settings.video.baseCommand = v; self.plugin.saveSettings(); });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Shell')
+      .setDesc('Shell used to run the command (bash, zsh, sh…)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.video.shell);
+        t.onChange(function (v) { self.plugin.settings.video.shell = v.trim() || 'bash'; self.plugin.saveSettings(); });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Terminal')
+      .setDesc('Terminal emulator that hosts the TUI')
+      .addDropdown(function (d) {
+        ['gnome-terminal', 'konsole', 'xfce4-terminal', 'xterm', 'kitty', 'alacritty', 'x-terminal-emulator', 'custom']
+          .forEach(function (k) { d.addOption(k, k); });
+        d.setValue(self.plugin.settings.video.terminalPreset);
+        d.onChange(function (v) { self.plugin.settings.video.terminalPreset = v; self.plugin.saveSettings(); self.display(); });
+      });
+
+    if (self.plugin.settings.video.terminalPreset === 'custom') {
+      new obsidian.Setting(containerEl)
+        .setName('Custom terminal binary')
+        .addText(function (t) {
+          t.setValue(self.plugin.settings.video.terminalBin);
+          t.setPlaceholder('wezterm');
+          t.onChange(function (v) { self.plugin.settings.video.terminalBin = v.trim(); self.plugin.saveSettings(); });
+        });
+      new obsidian.Setting(containerEl)
+        .setName('Custom terminal args')
+        .setDesc('Flags before the command, space-separated (e.g. "start --")')
+        .addText(function (t) {
+          t.setValue(self.plugin.settings.video.terminalArgs);
+          t.onChange(function (v) { self.plugin.settings.video.terminalArgs = v; self.plugin.saveSettings(); });
+        });
+    }
+
+    new obsidian.Setting(containerEl)
+      .setName('Keep terminal open')
+      .setDesc('Append "exec <shell>" so the window stays open after the command ends')
+      .addToggle(function (tg) {
+        tg.setValue(self.plugin.settings.video.keepOpen);
+        tg.onChange(function (v) { self.plugin.settings.video.keepOpen = v; self.plugin.saveSettings(); });
+      });
+
     containerEl.createEl('h3', { text: 'Note types' });
 
     TYPES.forEach(function (type) {
@@ -1577,6 +1795,28 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     });
 
     this.addCommand({
+      id: 'set-active-pending',
+      name: 'Set current note to Pending',
+      checkCallback: function (checking) {
+        var f = self.app.workspace.getActiveFile();
+        if (!f || f.extension !== 'md') return false;
+        if (!checking) self.setNoteStatus(f, 'Pending');
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'set-active-pause',
+      name: 'Set current note to Pause',
+      checkCallback: function (checking) {
+        var f = self.app.workspace.getActiveFile();
+        if (!f || f.extension !== 'md') return false;
+        if (!checking) self.setNoteStatus(f, 'Pause');
+        return true;
+      }
+    });
+
+    this.addCommand({
       id: 'init-structure',
       name: 'Initialize structure (folders, templates, bookmarks)',
       callback: function () {
@@ -1589,6 +1829,36 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       name: 'Check & normalize frontmatter',
       callback: function () {
         new NormalizeModal(self.app, self).open();
+      }
+    });
+
+    this.addCommand({
+      id: 'video-open-tui',
+      name: 'Video Notes Manager: open interactive menu (TUI)',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) self.runVideoManager({});
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'video-run-args',
+      name: 'Video Notes Manager: run with arguments…',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) new VideoRunModal(self.app, self).open();
+        return true;
+      }
+    });
+
+    this.addCommand({
+      id: 'video-download-clipboard',
+      name: 'Video Notes Manager: download URL from clipboard',
+      checkCallback: function (checking) {
+        if (obsidian.Platform && !obsidian.Platform.isDesktopApp) return false;
+        if (!checking) self.runVideoFromClipboard();
+        return true;
       }
     });
 
@@ -1635,6 +1905,11 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       {},
       DEFAULT_SETTINGS.normalize,
       stored.normalize || {}
+    );
+    this.settings.video = Object.assign(
+      {},
+      DEFAULT_SETTINGS.video,
+      stored.video || {}
     );
   };
 
@@ -1815,6 +2090,8 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     var s = this.settings;
     var canons = splitCsv(s.normalize.types);
     var tagMap = parseTagMap(s.normalize.tagMap);
+    var removeSet = {};
+    splitCsv(s.normalize.tagRemove).forEach(function (t) { removeSet[t.toLowerCase()] = true; });
     var files = this.app.vault.getMarkdownFiles();
     var results = [];
 
@@ -1822,12 +2099,12 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       var cache = this.app.metadataCache.getFileCache(files[i]);
       var fm = cache && cache.frontmatter;
       if (!fm) continue;
-      var probe = normalizeFrontmatter(fm, canons, tagMap, false);
+      var probe = normalizeFrontmatter(fm, canons, tagMap, false, removeSet);
       if (!probe.length) continue;
       if (apply) {
         try {
           await this.app.fileManager.processFrontMatter(files[i], function (fmw) {
-            normalizeFrontmatter(fmw, canons, tagMap, true);
+            normalizeFrontmatter(fmw, canons, tagMap, true, removeSet);
           });
         } catch (e) {
           probe.push('WRITE FAILED: ' + e.message);
@@ -1836,6 +2113,62 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       results.push({ file: files[i], changes: probe });
     }
     return results;
+  };
+
+  /* Launches the Video Notes Manager script in an external terminal.
+   * opts: {} (interactive TUI), { rawArgs } (expert string, unquoted) or
+   * { args } (safely quoted list). Desktop only — uses Node child_process. */
+  KnowledgeNoteFactory.prototype.runVideoManager = function (opts) {
+    var v = this.settings.video;
+    if (obsidian.Platform && !obsidian.Platform.isDesktopApp) {
+      new obsidian.Notice('Video Notes Manager runs on desktop only.');
+      return;
+    }
+    if (!v.workdir || !v.workdir.trim()) {
+      new obsidian.Notice('Set the project folder in the plugin settings first.');
+      return;
+    }
+
+    var child_process;
+    try {
+      child_process = require('child_process');
+    } catch (e) {
+      new obsidian.Notice('Cannot access child_process (desktop only).');
+      return;
+    }
+
+    var plan = buildSpawnPlan(v, opts || {});
+    try {
+      var proc = child_process.spawn(plan.bin, plan.args, {
+        cwd: plan.cwd,
+        detached: true,
+        stdio: 'ignore'
+      });
+      proc.on('error', function (err) {
+        new obsidian.Notice('Launch failed (' + plan.bin + '): ' + err.message +
+          ' — check the terminal setting.');
+      });
+      if (typeof proc.unref === 'function') proc.unref();
+      new obsidian.Notice('Video Notes Manager launched in ' + plan.bin + '.');
+    } catch (e) {
+      new obsidian.Notice('Launch failed: ' + e.message);
+    }
+  };
+
+  /* Reads the clipboard, classifies the URL and runs the matching command. */
+  KnowledgeNoteFactory.prototype.runVideoFromClipboard = async function () {
+    var text = '';
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.readText) {
+        text = await navigator.clipboard.readText();
+      }
+    } catch (e) { /* clipboard blocked */ }
+    var c = classifyUrl(text);
+    if (!c) {
+      new obsidian.Notice('Clipboard does not contain a supported URL.');
+      return;
+    }
+    this.runVideoManager({ args: ['download', c.kind, c.url] });
   };
 
   /* Instance of the core Bookmarks plugin, or null when disabled. */

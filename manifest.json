@@ -1,7 +1,7 @@
 {
   "id": "knowledge-note-factory",
   "name": "Knowledge Note Factory",
-  "version": "1.9.1",
+  "version": "1.12.0",
   "minAppVersion": "1.4.0",
   "description": "Creates a set of linked knowledge notes (Index, Flashcard, CheatSheet, Gist, Slides, Groom) and resource notes from configurable templates.",
   "author": "You",
