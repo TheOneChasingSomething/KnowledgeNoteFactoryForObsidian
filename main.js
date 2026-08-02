@@ -70,8 +70,57 @@ function headingInfo(line) {
   return null;
 }
 
+/* Strips wiki-link brackets, emphasis marks and leading symbols/emojis. */
 function normalizeHeadingText(t) {
-  return String(t).replace(/[*_`~]/g, '').trim().toLowerCase();
+  return String(t)
+    .replace(/\[\[|\]\]/g, '')
+    .replace(/[*_`~]/g, '')
+    .replace(/^[^0-9A-Za-z\u00C0-\u024F]+/, '')
+    .trim()
+    .toLowerCase();
+}
+
+/* Exact match, or (unless exactOnly) prefix followed by a non-letter
+ * boundary — so "LLM :" or "LLM (conversations)" still match "LLM". */
+function headingTextMatches(text, wanted, exactOnly) {
+  var t = normalizeHeadingText(text);
+  if (t === wanted) return true;
+  if (exactOnly) return false;
+  if (t.indexOf(wanted) === 0) {
+    var next = t.charAt(wanted.length);
+    return next === '' || !/[0-9a-z\u00C0-\u024F]/.test(next);
+  }
+  return false;
+}
+
+/* Recognizes a section title on a line, in three forms:
+ * 1. ATX heading (## LLM) — tolerant text match;
+ * 2. standalone bold line (**LLM**) — tolerant text match;
+ * 3. bare text line — exact match only, to avoid catching prose.
+ * Non-ATX titles get a synthetic level of parentLevel + 1. */
+function matchHeadingLine(line, wanted, parentLevel) {
+  var h = headingInfo(line);
+  if (h) {
+    if (headingTextMatches(h.text, wanted, false)) return { level: h.level, atx: true };
+    return null;
+  }
+  var b = line.match(/^\s*(\*\*|__)(.+?)\1\s*$/);
+  if (b && headingTextMatches(b[2], wanted, false)) {
+    return { level: (parentLevel || 1) + 1, atx: false };
+  }
+  var t = line.trim();
+  if (t && t.length <= 80 &&
+      !/^([-*+>]\s|\d+[.)]\s|!?\[|#|`|\||---)/.test(t) &&
+      headingTextMatches(t, wanted, true)) {
+    return { level: (parentLevel || 1) + 1, atx: false };
+  }
+  return null;
+}
+
+/* "Ressources > LLM" -> ['Ressources', 'LLM'] (falls back if empty). */
+function splitChain(str, fallback) {
+  var parts = (str || '').split('>').map(function (x) { return x.trim(); }).filter(Boolean);
+  return parts.length ? parts : fallback;
 }
 
 /* Automatic tags: fixed tags + index subject + keywords detected in the content. */
@@ -112,62 +161,107 @@ function resourceFrontmatter(ctx) {
   return lines;
 }
 
-/* Inserts a bullet under a chain of headings (e.g. Ressources > LLM),
- * grouped after the last bullet by the same author. Creates missing headings. */
-function insertIntoSection(content, bullet, chain, author) {
-  var lines = content.split('\n');
+/* Walks the heading chain and returns how far it matched, plus the scope
+ * [start, end) of the deepest matched heading and its level/kind. */
+function findChain(lines, chain) {
   var start = 0;
   var end = lines.length;
   var level = 0;
+  var atx = true;
+  var matched = 0;
 
   for (var c = 0; c < chain.length; c++) {
     var wanted = normalizeHeadingText(chain[c]);
     var found = -1;
-    var foundLevel = 0;
+    var info = null;
     for (var i = start; i < end; i++) {
-      var h = headingInfo(lines[i]);
-      if (h && normalizeHeadingText(h.text) === wanted) { found = i; foundLevel = h.level; break; }
+      var hm = matchHeadingLine(lines[i], wanted, level);
+      if (hm) { found = i; info = hm; break; }
     }
-    if (found === -1) {
-      /* Missing headings: created at the end of the current scope. */
-      var toInsert = [];
-      var curLevel = level > 0 ? level + 1 : 2;
-      if (end > 0 && lines[end - 1] && lines[end - 1].trim() !== '') toInsert.push('');
-      for (var r = c; r < chain.length; r++) {
-        toInsert.push(Array(Math.min(curLevel, 6) + 1).join('#') + ' ' + chain[r]);
-        toInsert.push('');
-        curLevel++;
-      }
-      toInsert.push(bullet);
-      Array.prototype.splice.apply(lines, [end, 0].concat(toInsert));
-      return lines.join('\n');
-    }
-    /* Narrow the scope to this heading's content. */
+    if (found === -1) break;
+    /* Narrow the scope to this heading's content (ATX headings close it). */
     start = found + 1;
     var scopeEnd = end;
     for (var j = start; j < end; j++) {
       var h2 = headingInfo(lines[j]);
-      if (h2 && h2.level <= foundLevel) { scopeEnd = j; break; }
+      if (h2 && h2.level <= info.level) { scopeEnd = j; break; }
     }
     end = scopeEnd;
-    level = foundLevel;
+    level = info.level;
+    atx = info.atx;
+    matched++;
+  }
+  return { matched: matched, start: start, end: end, level: level, atx: atx };
+}
+
+/* Inserts a bullet under a chain of headings (e.g. Ressources > LLM),
+ * grouped after the last bullet by the same author.
+ * Titles are matched tolerantly (ATX, bold or bare line, optional suffix);
+ * if the full chain is missing, falls back to the last title found anywhere
+ * in the note; only then are missing headings created. */
+function insertIntoSection(content, bullet, chain, author) {
+  var lines = content.split('\n');
+
+  var sec = findChain(lines, chain);
+  if (sec.matched < chain.length && chain.length > 1) {
+    /* Fallback: look for the final title (e.g. LLM) anywhere in the note,
+     * even when its parents are absent or named differently. */
+    var alt = findChain(lines, [chain[chain.length - 1]]);
+    if (alt.matched === 1) {
+      sec = { matched: chain.length, start: alt.start, end: alt.end, level: alt.level, atx: alt.atx };
+    }
+  }
+
+  if (sec.matched < chain.length) {
+    /* Missing headings: created at the end of the deepest matched scope. */
+    var toInsert = [];
+    var curLevel = sec.level > 0 ? sec.level + 1 : 2;
+    if (sec.end > 0 && lines[sec.end - 1] && lines[sec.end - 1].trim() !== '') toInsert.push('');
+    for (var r = sec.matched; r < chain.length; r++) {
+      toInsert.push(Array(Math.min(curLevel, 6) + 1).join('#') + ' ' + chain[r]);
+      toInsert.push('');
+      curLevel++;
+    }
+    toInsert.push(bullet);
+    Array.prototype.splice.apply(lines, [sec.end, 0].concat(toInsert));
+    return lines.join('\n');
   }
 
   var lastBullet = -1;
   var lastAuthorBullet = -1;
   var authorRe = author ? new RegExp('\\b' + escapeRegExp(author) + '\\s*-', 'i') : null;
-  for (var k = start; k < end; k++) {
-    if (/^\s*[-*+]\s+\S/.test(lines[k])) {
-      lastBullet = k;
-      if (authorRe && authorRe.test(lines[k])) lastAuthorBullet = k;
+
+  if (sec.atx) {
+    /* ATX scope is reliable: scan the whole section. */
+    for (var k = sec.start; k < sec.end; k++) {
+      if (/^\s*[-*+]\s+\S/.test(lines[k])) {
+        lastBullet = k;
+        if (authorRe && authorRe.test(lines[k])) lastAuthorBullet = k;
+      }
+    }
+  } else {
+    /* Bold/bare titles do not bound a scope: only take the contiguous
+     * list right after the title, and stop at the first other content
+     * (which is likely the next pseudo-section). */
+    var m = sec.start;
+    while (m < sec.end && lines[m].trim() === '') m++;
+    for (; m < sec.end; m++) {
+      if (lines[m].trim() === '') continue;
+      if (/^\s*[-*+]\s+\S/.test(lines[m])) {
+        lastBullet = m;
+        if (authorRe && authorRe.test(lines[m])) lastAuthorBullet = m;
+      } else {
+        break;
+      }
     }
   }
+
   var pos;
   if (lastAuthorBullet !== -1) pos = lastAuthorBullet + 1;
   else if (lastBullet !== -1) pos = lastBullet + 1;
   else {
-    pos = start;
-    while (pos < end && lines[pos].trim() === '') pos++;
+    pos = sec.start;
+    while (pos < sec.end && lines[pos].trim() === '') pos++;
   }
   lines.splice(pos, 0, bullet);
   return lines.join('\n');
@@ -188,6 +282,8 @@ var DEFAULT_SETTINGS = {
     template: '',
     trustLevel: '',
     authors: 'ChatGPT, Claude, ClaudeIA, Claude IA, Lumo',
+    projectChain: 'Ressources > LLM',
+    indexChain: 'LLM',
     keywords: 'Git, GitHub, GitLab, TLS, HTTPS, SSH, MITM, CTF, Docker, Python, JavaScript, V8, Linux, Obsidian',
     fixedTags: 'literature-note, ressources-note, resource, resource-note'
   },
@@ -653,6 +749,8 @@ var FactorySettingTab = /** @class */ (function (_super) {
       ['template', 'Resource template', 'Template name in the template folder (empty: none)'],
       ['trustLevel', 'Default TrustLevel', 'Initial value of the TrustLevel field'],
       ['authors', 'Suggested authors', 'Comma-separated list, used for input assistance and link grouping'],
+      ['projectChain', 'Project note headings', "Heading chain in the project note, separated by '>' (default: Ressources > LLM)"],
+      ['indexChain', 'Index note headings', "Heading chain in the knowledge-index note (default: LLM)"],
       ['keywords', 'Keywords → tags', 'Words searched in the title and content to generate automatic tags'],
       ['fixedTags', 'Fixed tags', 'Tags added to every resource note']
     ];
@@ -943,8 +1041,10 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     }
 
     /* Backlinks: project (Ressources > LLM) and knowledge-index (LLM). */
-    if (projectFile) await this.insertResourceLink(projectFile, name, opts.author, ['Ressources', 'LLM']);
-    if (indexFile) await this.insertResourceLink(indexFile, name, opts.author, ['LLM']);
+    var projectChain = splitChain(s.resource.projectChain, ['Ressources', 'LLM']);
+    var indexChain = splitChain(s.resource.indexChain, ['LLM']);
+    if (projectFile) await this.insertResourceLink(projectFile, name, opts.author, projectChain);
+    if (indexFile) await this.insertResourceLink(indexFile, name, opts.author, indexChain);
 
     new obsidian.Notice('Resource note created: ' + name);
     await this.app.workspace.getLeaf(false).openFile(file);
