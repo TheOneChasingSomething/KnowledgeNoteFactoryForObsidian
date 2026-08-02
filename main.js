@@ -220,6 +220,101 @@ function collectBookmarkGroups(items, title, out) {
   return out;
 }
 
+/* "pending" -> "Pending" (first letter only; the rest is preserved). */
+function capitalizeFirst(v) {
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+/* Canonical type: case-insensitive match against the configured list, with
+ * an -ing bridge ("researching" -> "Research"); unknown values just get
+ * their first letter capitalized. */
+function canonicalType(v, canons) {
+  var low = v.toLowerCase();
+  for (var i = 0; i < canons.length; i++) {
+    var c = canons[i];
+    var cl = c.toLowerCase();
+    if (low === cl || low === cl + 'ing' || cl === low + 'ing') return c;
+  }
+  return capitalizeFirst(v);
+}
+
+/* "ressources=resources, …" -> { ressources: 'resources', … } (keys lowered). */
+function parseTagMap(str) {
+  var map = {};
+  splitCsv(str).forEach(function (pair) {
+    var i = pair.indexOf('=');
+    if (i === -1) return;
+    var from = pair.slice(0, i).trim().toLowerCase();
+    var to = pair.slice(i + 1).trim();
+    if (from && to) map[from] = to;
+  });
+  return map;
+}
+
+/* Computes (and, when apply=true, performs) frontmatter normalization:
+ * statuses capitalized, types canonicalized, tags mapped to their English
+ * form and case-insensitively deduplicated. Returns change descriptions. */
+function normalizeFrontmatter(fm, canons, tagMap, apply) {
+  var changes = [];
+
+  function fixStatus(obj, key, label) {
+    if (!obj || typeof obj[key] !== 'string' || !obj[key].trim()) return;
+    var v = obj[key];
+    var n = capitalizeFirst(v.trim());
+    if (n !== v) {
+      changes.push(label + ': "' + v + '" → "' + n + '"');
+      if (apply) obj[key] = n;
+    }
+  }
+
+  function fixType(obj, key, label) {
+    if (!obj || typeof obj[key] !== 'string' || !obj[key].trim()) return;
+    var v = obj[key];
+    var n = canonicalType(v.trim(), canons);
+    if (n !== v) {
+      changes.push(label + ': "' + v + '" → "' + n + '"');
+      if (apply) obj[key] = n;
+    }
+  }
+
+  fixStatus(fm, 'status', 'status');
+  fixStatus(fm.project, 'status', 'project.status');
+  fixStatus(fm.task, 'status', 'task.status');
+  fixType(fm, 'type', 'type');
+  fixType(fm.project, 'type', 'project.type');
+  fixType(fm.task, 'type', 'task.type');
+
+  ['tags', 'Tags'].forEach(function (k) {
+    var arr = fm[k];
+    if (typeof arr === 'string' && arr.trim()) arr = [arr];
+    if (!Array.isArray(arr)) return;
+    var out = [];
+    var seen = {};
+    var changed = false;
+    for (var i = 0; i < arr.length; i++) {
+      var tag = arr[i];
+      if (typeof tag !== 'string') { out.push(tag); continue; }
+      var trimmed = tag.trim();
+      var mapped = tagMap[trimmed.toLowerCase()] || trimmed;
+      var keyL = mapped.toLowerCase();
+      if (seen[keyL]) {
+        changed = true;
+        changes.push(k + ': duplicate "' + tag + '" removed');
+        continue;
+      }
+      seen[keyL] = true;
+      if (mapped !== tag) {
+        changed = true;
+        changes.push(k + ': "' + tag + '" → "' + mapped + '"');
+      }
+      out.push(mapped);
+    }
+    if (changed && apply) fm[k] = out;
+  });
+
+  return changes;
+}
+
 /* Automatic tags: fixed tags + index subject + keywords detected in the content. */
 function buildResourceTags(resourceSettings, indexBase, text) {
   var tags = [];
@@ -299,7 +394,7 @@ var TPL_FLASHCARD_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{inde
 var TPL_CHEATSHEET_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - cheatsheet-note\n---\n';
 var TPL_GIST_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - gist-note\n---\n\n## {{title}}\n';
 var TPL_PERMANENT_STARTER = '---\nrédaction: {{date}}\nImpactScore:\ntags:\n  - permanent-note\n---\n\n# {{title}}\n\nindex links :\n- \n';
-var TPL_RESOURCE_STARTER = '---\nAuthor: \nURL: \nPublication: {{date}}\nLecture: {{date}}\nProject: \nTask: \nKnowledge-index: \nTrustLevel: \ndownload:\nTags:\n  - literature-note\n  - ressources-note\n  - resource\n  - resource-note\n---\n';
+var TPL_RESOURCE_STARTER = '---\nAuthor: \nURL: \nPublication: {{date}}\nLecture: {{date}}\nProject: \nTask: \nKnowledge-index: \nTrustLevel: \ndownload:\nTags:\n  - literature-note\n  - resources-note\n  - resource\n  - resource-note\n---\n';
 var TPL_PROJECT_STARTER = '---\nrédaction: {{date}}\ntags:\n  - project-note\nproject:\n  name: {{name}}\n  parent: None\n  status: Pending\n  type: \n---\n\n' + PROJECT_BODY_SKELETON;
 var TPL_TASK_STARTER = '---\nrédaction: {{date}}\ntags:\n  - Task-Note\nproduction:\ntask:\n  project: \n  status: Pending\n  type: \n---\n';
 
@@ -432,7 +527,7 @@ var DEFAULT_SETTINGS = {
     projectChain: 'Ressources > LLM',
     indexChain: 'LLM',
     keywords: 'Git, GitHub, GitLab, TLS, HTTPS, SSH, MITM, CTF, Docker, Python, JavaScript, V8, Linux, Obsidian',
-    fixedTags: 'literature-note, ressources-note, resource, resource-note'
+    fixedTags: 'literature-note, resources-note, resource, resource-note'
   },
   project: {
     template: '',
@@ -447,6 +542,10 @@ var DEFAULT_SETTINGS = {
   init: {
     extraFolders: '2_References, 4_Permanent, 5_Knowledges, 6_Projects, Ressources/Images',
     extraGroups: '0 - DashBoard, 1 - Knowledge'
+  },
+  normalize: {
+    types: 'Coding, VibeCoding, Challenge, Research, Knowledge, Config, Tooling',
+    tagMap: 'ressource=resource, ressources=resources, ressource-note=resource-note, ressources-note=resources-note'
   },
   types: {
     index:      { folder: '5_Knowledges/0 - Index',      template: 'index-note_template',      enabled: true },
@@ -1070,6 +1169,83 @@ var ProjectStatusModal = /** @class */ (function (_super) {
 })(obsidian.Modal);
 
 /* ------------------------------------------------------------------ */
+/* Frontmatter check & normalize modal                                 */
+/* ------------------------------------------------------------------ */
+
+var NormalizeModal = /** @class */ (function (_super) {
+  function NormalizeModal(app, plugin) {
+    var _this = _super.call(this, app) || this;
+    _this.plugin = plugin;
+    _this.running = false;
+    return _this;
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(NormalizeModal, _super);
+  NormalizeModal.prototype = Object.create(_super.prototype);
+  NormalizeModal.prototype.constructor = NormalizeModal;
+
+  NormalizeModal.prototype.onOpen = function () {
+    var self = this;
+    var contentEl = this.contentEl;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'Check & normalize frontmatter' });
+    contentEl.createEl('p', {
+      text: 'Scans every note of the vault: capitalizes status values ' +
+        '(pending → Pending), canonicalizes types (' +
+        this.plugin.settings.normalize.types + '), maps tags to English ' +
+        'and removes duplicates. "Check" only reports; "Normalize" writes.'
+    });
+
+    new obsidian.Setting(contentEl)
+      .addButton(function (b) {
+        b.setButtonText('Check').onClick(function () { self.run(false); });
+      })
+      .addButton(function (b) {
+        b.setButtonText('Normalize').setCta().onClick(function () { self.run(true); });
+      });
+
+    this.resultsEl = contentEl.createEl('div');
+  };
+
+  NormalizeModal.prototype.run = async function (apply) {
+    if (this.running) return;
+    this.running = true;
+    var self = this;
+    this.resultsEl.empty();
+    this.resultsEl.createEl('p', { text: 'Scanning…' });
+    try {
+      var results = await this.plugin.normalizeFrontmatters(apply);
+      this.resultsEl.empty();
+      var head;
+      if (!results.length) head = 'All frontmatters are already normalized.';
+      else if (apply) head = results.length + ' note(s) updated.';
+      else head = results.length + ' note(s) need normalization.';
+      this.resultsEl.createEl('p', { text: head });
+      var max = 60;
+      for (var i = 0; i < Math.min(results.length, max); i++) {
+        var r = results[i];
+        var d = self.resultsEl.createEl('div');
+        d.createEl('strong', { text: r.file.basename });
+        d.createEl('div', { text: r.changes.join(' ; ') });
+      }
+      if (results.length > max) {
+        this.resultsEl.createEl('p', { text: '… and ' + (results.length - max) + ' more.' });
+      }
+      new obsidian.Notice(head);
+    } catch (e) {
+      this.resultsEl.empty();
+      this.resultsEl.createEl('p', { text: 'Error: ' + e.message });
+    }
+    this.running = false;
+  };
+
+  NormalizeModal.prototype.onClose = function () {
+    this.contentEl.empty();
+  };
+
+  return NormalizeModal;
+})(obsidian.Modal);
+
+/* ------------------------------------------------------------------ */
 /* Settings tab                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1276,6 +1452,30 @@ var FactorySettingTab = /** @class */ (function (_super) {
         });
       });
 
+    containerEl.createEl('h3', { text: 'Normalization' });
+
+    new obsidian.Setting(containerEl)
+      .setName('Canonical types')
+      .setDesc('Comma-separated list; values are matched case-insensitively, with an -ing bridge (researching → Research)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.normalize.types);
+        t.onChange(function (v) {
+          self.plugin.settings.normalize.types = v;
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Tag map')
+      .setDesc('from=to pairs, comma-separated — English is preferred (ressources=resources)')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.normalize.tagMap);
+        t.onChange(function (v) {
+          self.plugin.settings.normalize.tagMap = v;
+          self.plugin.saveSettings();
+        });
+      });
+
     containerEl.createEl('h3', { text: 'Note types' });
 
     TYPES.forEach(function (type) {
@@ -1381,6 +1581,14 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       }
     });
 
+    this.addCommand({
+      id: 'check-normalize-frontmatter',
+      name: 'Check & normalize frontmatter',
+      callback: function () {
+        new NormalizeModal(self.app, self).open();
+      }
+    });
+
     this.addRibbonIcon('library', 'Knowledge Note Factory', function () {
       new CreateKnowledgeModal(self.app, self).open();
     });
@@ -1419,6 +1627,11 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       {},
       DEFAULT_SETTINGS.init,
       stored.init || {}
+    );
+    this.settings.normalize = Object.assign(
+      {},
+      DEFAULT_SETTINGS.normalize,
+      stored.normalize || {}
     );
   };
 
@@ -1590,6 +1803,36 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       new obsidian.Notice('Structure ready: ' + nf + ' folder(s), ' + nt +
         ' template(s), ' + ng + ' bookmark group(s) created.');
     }
+  };
+
+  /* Scans every markdown note's frontmatter; when apply=true the changes
+   * are written through processFrontMatter. The metadata cache object is
+   * never mutated: the probe pass runs with apply=false on it. */
+  KnowledgeNoteFactory.prototype.normalizeFrontmatters = async function (apply) {
+    var s = this.settings;
+    var canons = splitCsv(s.normalize.types);
+    var tagMap = parseTagMap(s.normalize.tagMap);
+    var files = this.app.vault.getMarkdownFiles();
+    var results = [];
+
+    for (var i = 0; i < files.length; i++) {
+      var cache = this.app.metadataCache.getFileCache(files[i]);
+      var fm = cache && cache.frontmatter;
+      if (!fm) continue;
+      var probe = normalizeFrontmatter(fm, canons, tagMap, false);
+      if (!probe.length) continue;
+      if (apply) {
+        try {
+          await this.app.fileManager.processFrontMatter(files[i], function (fmw) {
+            normalizeFrontmatter(fmw, canons, tagMap, true);
+          });
+        } catch (e) {
+          probe.push('WRITE FAILED: ' + e.message);
+        }
+      }
+      results.push({ file: files[i], changes: probe });
+    }
+    return results;
   };
 
   /* Instance of the core Bookmarks plugin, or null when disabled. */
