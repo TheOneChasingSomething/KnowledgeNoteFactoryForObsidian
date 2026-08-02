@@ -1,9 +1,9 @@
 {
   "id": "knowledge-note-factory",
   "name": "Knowledge Note Factory",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "minAppVersion": "1.4.0",
-  "description": "Crée automatiquement un jeu de notes (Index, Flashcard, CheatSheet, Gist, Slides, Groom) dans 5_Knowledges, à partir de templates configurables.",
-  "author": "Vous",
+  "description": "Creates a set of linked knowledge notes (Index, Flashcard, CheatSheet, Gist, Slides, Groom) and resource notes from configurable templates.",
+  "author": "You",
   "isDesktopOnly": false
 }
