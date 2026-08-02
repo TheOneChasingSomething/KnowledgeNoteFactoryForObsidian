@@ -195,6 +195,15 @@ function attachFileSuggest(app, inputEl, folder, onPick) {
   if (FileSuggestClass) new FileSuggestClass(app, inputEl, folder, onPick);
 }
 
+/* Removes every file bookmark pointing to path from a group (in place). */
+function removeBookmarkPath(group, path) {
+  if (!group || !group.items) return;
+  for (var i = group.items.length - 1; i >= 0; i--) {
+    var it = group.items[i];
+    if (it && it.type === 'file' && it.path === path) group.items.splice(i, 1);
+  }
+}
+
 /* Automatic tags: fixed tags + index subject + keywords detected in the content. */
 function buildResourceTags(resourceSettings, indexBase, text) {
   var tags = [];
@@ -399,7 +408,9 @@ var DEFAULT_SETTINGS = {
   },
   project: {
     template: '',
-    taskSection: 'Liste des tâches'
+    taskSection: 'Liste des tâches',
+    pendingGroup: '4 - inProgress',
+    pauseGroup: '3 - OnHold'
   },
   task: {
     folder: '6_Projects',
@@ -950,6 +961,83 @@ var CreateTaskModal = /** @class */ (function (_super) {
 })(obsidian.Modal);
 
 /* ------------------------------------------------------------------ */
+/* Project status modal (Pending / Pause + bookmark move)              */
+/* ------------------------------------------------------------------ */
+
+var ProjectStatusModal = /** @class */ (function (_super) {
+  function ProjectStatusModal(app, plugin) {
+    var _this = _super.call(this, app) || this;
+    _this.plugin = plugin;
+    _this.status = 'Pending';
+    _this.projectText = '';
+
+    /* Prefill with the active note when it looks like a project note. */
+    var active = app.workspace.getActiveFile();
+    if (active && active.extension === 'md') {
+      var folder = obsidian.normalizePath(plugin.settings.resource.projectFolder || '');
+      var cache = app.metadataCache.getFileCache(active);
+      var isProject = (folder && active.path.indexOf(folder + '/') === 0) ||
+        (cache && cache.frontmatter && cache.frontmatter.project);
+      if (isProject) _this.projectText = active.basename;
+    }
+    return _this;
+  }
+  if (Object.setPrototypeOf) Object.setPrototypeOf(ProjectStatusModal, _super);
+  ProjectStatusModal.prototype = Object.create(_super.prototype);
+  ProjectStatusModal.prototype.constructor = ProjectStatusModal;
+
+  ProjectStatusModal.prototype.onOpen = function () {
+    var self = this;
+    var contentEl = this.contentEl;
+    contentEl.empty();
+    contentEl.createEl('h2', { text: 'Project status' });
+
+    new obsidian.Setting(contentEl)
+      .setName('Project')
+      .setDesc('Type its name or [[…]], suggestions as in Obsidian')
+      .addText(function (t) {
+        t.setValue(self.projectText);
+        t.setPlaceholder('[[202604270829h - ~~ Challenge MITM Https ~~]]');
+        t.onChange(function (v) { self.projectText = v; });
+        attachFileSuggest(self.app, t.inputEl, self.plugin.settings.resource.projectFolder, function (file) {
+          self.projectText = file.basename;
+        });
+      });
+
+    new obsidian.Setting(contentEl)
+      .setName('Status')
+      .setDesc('Pending → bookmark in "' + self.plugin.settings.project.pendingGroup +
+        '" — Pause → bookmark in "' + self.plugin.settings.project.pauseGroup + '"')
+      .addDropdown(function (d) {
+        d.addOption('Pending', 'Pending');
+        d.addOption('Pause', 'Pause');
+        d.setValue(self.status);
+        d.onChange(function (v) { self.status = v; });
+      });
+
+    new obsidian.Setting(contentEl).addButton(function (b) {
+      b.setButtonText('Apply').setCta().onClick(function () { self.submit(); });
+    });
+  };
+
+  ProjectStatusModal.prototype.submit = function () {
+    var file = this.plugin.resolveNote(this.projectText);
+    if (!file) {
+      new obsidian.Notice('Project note not found: ' + (this.projectText || '(empty)'));
+      return;
+    }
+    this.close();
+    this.plugin.setProjectStatus(file, this.status);
+  };
+
+  ProjectStatusModal.prototype.onClose = function () {
+    this.contentEl.empty();
+  };
+
+  return ProjectStatusModal;
+})(obsidian.Modal);
+
+/* ------------------------------------------------------------------ */
 /* Settings tab                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1089,6 +1177,28 @@ var FactorySettingTab = /** @class */ (function (_super) {
       });
 
     new obsidian.Setting(containerEl)
+      .setName('Bookmark group — Pending')
+      .setDesc('Bookmarks group receiving projects set to Pending')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.project.pendingGroup);
+        t.onChange(function (v) {
+          self.plugin.settings.project.pendingGroup = v.trim();
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Bookmark group — Pause')
+      .setDesc('Bookmarks group receiving projects set to Pause')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.project.pauseGroup);
+        t.onChange(function (v) {
+          self.plugin.settings.project.pauseGroup = v.trim();
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
       .setName('Tasks folder')
       .setDesc('Folder where task notes are created')
       .addText(function (t) {
@@ -1196,6 +1306,14 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       name: 'Create a task note',
       callback: function () {
         new CreateTaskModal(self.app, self).open();
+      }
+    });
+
+    this.addCommand({
+      id: 'set-project-status',
+      name: 'Set project status (Pending / Pause)',
+      callback: function () {
+        new ProjectStatusModal(self.app, self).open();
       }
     });
 
@@ -1316,6 +1434,77 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     if (indexFile && s.openIndexAfterCreate) {
       await this.app.workspace.getLeaf(false).openFile(indexFile);
     }
+  };
+
+  /* Instance of the core Bookmarks plugin, or null when disabled. */
+  KnowledgeNoteFactory.prototype.getBookmarksInstance = function () {
+    var ip = this.app.internalPlugins;
+    if (!ip) return null;
+    if (typeof ip.getEnabledPluginById === 'function') {
+      var inst = ip.getEnabledPluginById('bookmarks');
+      if (inst) return inst;
+    }
+    var p = typeof ip.getPluginById === 'function'
+      ? ip.getPluginById('bookmarks')
+      : (ip.plugins && ip.plugins.bookmarks);
+    if (!p || p.enabled === false) return null;
+    return p.instance || null;
+  };
+
+  /* Root-level bookmark group by title; created on demand when create=true. */
+  KnowledgeNoteFactory.prototype.findBookmarkGroup = function (bk, title, create) {
+    var items = bk.items || (bk.items = []);
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i].type === 'group' && items[i].title === title) return items[i];
+    }
+    if (!create) return null;
+    var group = { type: 'group', ctime: Date.now(), title: title, items: [] };
+    items.push(group);
+    return group;
+  };
+
+  /* Sets project.status in the frontmatter and moves the project's bookmark
+   * into the group matching the status (Pending -> pendingGroup,
+   * Pause -> pauseGroup), removing it from the other group. */
+  KnowledgeNoteFactory.prototype.setProjectStatus = async function (file, status) {
+    var s = this.settings;
+
+    try {
+      await this.app.fileManager.processFrontMatter(file, function (fm) {
+        if (!fm.project || typeof fm.project !== 'object') fm.project = {};
+        fm.project.status = status;
+      });
+    } catch (e) {
+      new obsidian.Notice('Frontmatter update failed: ' + e.message);
+      return;
+    }
+
+    var targetTitle = status === 'Pause' ? s.project.pauseGroup : s.project.pendingGroup;
+    var otherTitle = status === 'Pause' ? s.project.pendingGroup : s.project.pauseGroup;
+
+    var bk = this.getBookmarksInstance();
+    if (!bk) {
+      new obsidian.Notice('Status set to ' + status +
+        ' — core Bookmarks plugin is disabled, no bookmark was moved.');
+      return;
+    }
+
+    var target = this.findBookmarkGroup(bk, targetTitle, true);
+    var other = this.findBookmarkGroup(bk, otherTitle, false);
+    removeBookmarkPath(other, file.path);
+
+    var already = false;
+    var items = target.items || (target.items = []);
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i].type === 'file' && items[i].path === file.path) { already = true; break; }
+    }
+    if (!already) items.push({ type: 'file', ctime: Date.now(), path: file.path });
+
+    if (typeof bk.saveData === 'function') bk.saveData();
+    if (typeof bk.trigger === 'function') bk.trigger('changed');
+
+    new obsidian.Notice('"' + file.basename + '" → ' + status +
+      ' (bookmarked in "' + targetTitle + '")');
   };
 
   /* Child id derived from a parent id: a parent ending with a letter gets
