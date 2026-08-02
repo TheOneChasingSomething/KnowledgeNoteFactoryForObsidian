@@ -275,6 +275,18 @@ function taskNoteFrontmatter(ctx) {
 /* Built-in project body when no template is configured. */
 var PROJECT_BODY_SKELETON = '## Objectifs\n\n## Liste des tâches\n\n## Notes\n\n## LLM\n';
 
+/* Starter contents written by "Initialize structure" for missing templates.
+ * The plugin regenerates the mandated frontmatter at note creation anyway,
+ * so these mainly document each template and host the {{…}} tokens. */
+var TPL_INDEX_STARTER = '---\nrédaction: {{date}}\ntags:\n  - project-knowledge-note\nproject:\n  name: {{name}}\n  parent: None\n  status: Pending\n  type: Knowledge\n---\n';
+var TPL_FLASHCARD_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - flashcard-note\n---\n';
+var TPL_CHEATSHEET_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - cheatsheet-note\n---\n';
+var TPL_GIST_STARTER = '---\nrédaction: {{date}}\nKnowledge-index: "{{index}}"\ntags:\n  - permanent-note\n  - gist-note\n---\n\n## {{title}}\n';
+var TPL_PERMANENT_STARTER = '---\nrédaction: {{date}}\nImpactScore:\ntags:\n  - permanent-note\n---\n\n# {{title}}\n\nindex links :\n- \n';
+var TPL_RESOURCE_STARTER = '---\nAuthor: \nURL: \nPublication: {{date}}\nLecture: {{date}}\nProject: \nTask: \nKnowledge-index: \nTrustLevel: \ndownload:\nTags:\n  - literature-note\n  - ressources-note\n  - resource\n  - resource-note\n---\n';
+var TPL_PROJECT_STARTER = '---\nrédaction: {{date}}\ntags:\n  - project-note\nproject:\n  name: {{name}}\n  parent: None\n  status: Pending\n  type: \n---\n\n' + PROJECT_BODY_SKELETON;
+var TPL_TASK_STARTER = '---\nrédaction: {{date}}\ntags:\n  - Task-Note\nproduction:\ntask:\n  project: \n  status: Pending\n  type: \n---\n';
+
 /* Walks the heading chain and returns how far it matched, plus the scope
  * [start, end) of the deepest matched heading and its level/kind. */
 function findChain(lines, chain) {
@@ -415,6 +427,10 @@ var DEFAULT_SETTINGS = {
   task: {
     folder: '6_Projects',
     template: ''
+  },
+  init: {
+    extraFolders: '2_References, 4_Permanent, 5_Knowledges, 6_Projects, Ressources/Images',
+    extraGroups: '0 - DashBoard, 1 - Knowledge'
   },
   types: {
     index:      { folder: '5_Knowledges/0 - Index',      template: 'index-note_template',      enabled: true },
@@ -1220,6 +1236,30 @@ var FactorySettingTab = /** @class */ (function (_super) {
         });
       });
 
+    containerEl.createEl('h3', { text: 'Initialization' });
+
+    new obsidian.Setting(containerEl)
+      .setName('Extra folders')
+      .setDesc('Comma-separated folders also created by "Initialize structure"')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.init.extraFolders);
+        t.onChange(function (v) {
+          self.plugin.settings.init.extraFolders = v;
+          self.plugin.saveSettings();
+        });
+      });
+
+    new obsidian.Setting(containerEl)
+      .setName('Extra bookmark groups')
+      .setDesc('Comma-separated bookmark groups also created by "Initialize structure"')
+      .addText(function (t) {
+        t.setValue(self.plugin.settings.init.extraGroups);
+        t.onChange(function (v) {
+          self.plugin.settings.init.extraGroups = v;
+          self.plugin.saveSettings();
+        });
+      });
+
     containerEl.createEl('h3', { text: 'Note types' });
 
     TYPES.forEach(function (type) {
@@ -1317,6 +1357,14 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       }
     });
 
+    this.addCommand({
+      id: 'init-structure',
+      name: 'Initialize structure (folders, templates, bookmarks)',
+      callback: function () {
+        self.initializeStructure();
+      }
+    });
+
     this.addRibbonIcon('library', 'Knowledge Note Factory', function () {
       new CreateKnowledgeModal(self.app, self).open();
     });
@@ -1350,6 +1398,11 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       {},
       DEFAULT_SETTINGS.task,
       stored.task || {}
+    );
+    this.settings.init = Object.assign(
+      {},
+      DEFAULT_SETTINGS.init,
+      stored.init || {}
     );
   };
 
@@ -1433,6 +1486,93 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
 
     if (indexFile && s.openIndexAfterCreate) {
       await this.app.workspace.getLeaf(false).openFile(indexFile);
+    }
+  };
+
+  /* Creates every folder, template file and bookmark group the plugin
+   * expects — idempotent: anything that already exists is left untouched. */
+  KnowledgeNoteFactory.prototype.initializeStructure = async function () {
+    var s = this.settings;
+    var nf = 0;
+    var nt = 0;
+    var ng = 0;
+
+    /* 1. Folder tree */
+    var folders = [];
+    for (var i = 0; i < TYPES.length; i++) folders.push(s.types[TYPES[i]].folder);
+    folders.push(s.resource.inboxFolder, s.resource.projectFolder, s.task.folder, s.templateFolder);
+    folders = folders.concat(splitCsv(s.init.extraFolders));
+    var seen = {};
+    for (var j = 0; j < folders.length; j++) {
+      if (!folders[j]) continue;
+      var f = obsidian.normalizePath(folders[j]);
+      if (seen[f]) continue;
+      seen[f] = true;
+      if (!this.app.vault.getAbstractFileByPath(f)) {
+        await this.ensureFolder(f);
+        nf++;
+      }
+    }
+
+    /* 2. Template files (missing ones only) */
+    var starters = {};
+    function addStarter(name, content) {
+      if (!name) return;
+      var file = name.endsWith('.md') ? name : name + '.md';
+      if (!starters[file]) starters[file] = content;
+    }
+    addStarter(s.types.index.template, TPL_INDEX_STARTER);
+    addStarter(s.types.flashcard.template, TPL_FLASHCARD_STARTER);
+    addStarter(s.types.cheatsheet.template, TPL_CHEATSHEET_STARTER);
+    addStarter(s.types.gist.template, TPL_GIST_STARTER);
+    addStarter(s.types.slides.template, TPL_PERMANENT_STARTER);
+    addStarter(s.types.groom.template, TPL_PERMANENT_STARTER);
+    addStarter(s.resource.template, TPL_RESOURCE_STARTER);
+    addStarter(s.project.template, TPL_PROJECT_STARTER);
+    addStarter(s.task.template, TPL_TASK_STARTER);
+
+    for (var name in starters) {
+      if (!Object.prototype.hasOwnProperty.call(starters, name)) continue;
+      var p = obsidian.normalizePath(s.templateFolder + '/' + name);
+      if (!this.app.vault.getAbstractFileByPath(p)) {
+        try {
+          await this.app.vault.create(p, starters[name]);
+          nt++;
+        } catch (e) {
+          new obsidian.Notice('Template creation failed: ' + p + ' — ' + e.message);
+        }
+      }
+    }
+
+    /* 3. Bookmark groups */
+    var bk = this.getBookmarksInstance();
+    if (bk) {
+      var groups = [s.project.pendingGroup, s.project.pauseGroup]
+        .concat(splitCsv(s.init.extraGroups));
+      groups.sort();
+      var seenG = {};
+      for (var gi = 0; gi < groups.length; gi++) {
+        var title = groups[gi];
+        if (!title || seenG[title]) continue;
+        seenG[title] = true;
+        if (!this.findBookmarkGroup(bk, title, false)) {
+          this.findBookmarkGroup(bk, title, true);
+          ng++;
+        }
+      }
+      if (ng > 0) {
+        if (typeof bk.saveData === 'function') bk.saveData();
+        if (typeof bk.trigger === 'function') bk.trigger('changed');
+      }
+    } else {
+      new obsidian.Notice('Core Bookmarks plugin is disabled — bookmark groups were not created.');
+    }
+
+    if (nf + nt + ng === 0) {
+      new obsidian.Notice('Structure already in place — nothing to create.');
+    } else {
+      new obsidian.Notice('Structure ready: ' + nf + ' folder(s), ' + nt +
+        ' template(s), ' + ng + ' bookmark group(s) created.');
     }
   };
 
