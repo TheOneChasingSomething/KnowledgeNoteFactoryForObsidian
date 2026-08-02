@@ -204,6 +204,22 @@ function removeBookmarkPath(group, path) {
   }
 }
 
+/* Recursively collects every bookmark group whose title matches, ignoring
+ * case and surrounding spaces — so "4 - InProgress" nested anywhere matches
+ * a setting spelled "4 - inProgress". */
+function collectBookmarkGroups(items, title, out) {
+  if (!items) return out;
+  var wanted = String(title || '').trim().toLowerCase();
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    if (it && it.type === 'group') {
+      if (String(it.title || '').trim().toLowerCase() === wanted) out.push(it);
+      collectBookmarkGroups(it.items, title, out);
+    }
+  }
+  return out;
+}
+
 /* Automatic tags: fixed tags + index subject + keywords detected in the content. */
 function buildResourceTags(resourceSettings, indexBase, text) {
   var tags = [];
@@ -421,7 +437,7 @@ var DEFAULT_SETTINGS = {
   project: {
     template: '',
     taskSection: 'Liste des tâches',
-    pendingGroup: '4 - inProgress',
+    pendingGroup: '4 - InProgress',
     pauseGroup: '3 - OnHold'
   },
   task: {
@@ -1591,12 +1607,12 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     return p.instance || null;
   };
 
-  /* Root-level bookmark group by title; created on demand when create=true. */
+  /* Bookmark group by title — case-insensitive, searched recursively at any
+   * depth; created at the root on demand when create=true and none matches. */
   KnowledgeNoteFactory.prototype.findBookmarkGroup = function (bk, title, create) {
     var items = bk.items || (bk.items = []);
-    for (var i = 0; i < items.length; i++) {
-      if (items[i] && items[i].type === 'group' && items[i].title === title) return items[i];
-    }
+    var matches = collectBookmarkGroups(items, title, []);
+    if (matches.length) return matches[0];
     if (!create) return null;
     var group = { type: 'group', ctime: Date.now(), title: title, items: [] };
     items.push(group);
@@ -1629,16 +1645,22 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
       return;
     }
 
-    var target = this.findBookmarkGroup(bk, targetTitle, true);
-    var other = this.findBookmarkGroup(bk, otherTitle, false);
-    removeBookmarkPath(other, file.path);
+    var rootItems = bk.items || (bk.items = []);
 
-    var already = false;
-    var items = target.items || (target.items = []);
-    for (var i = 0; i < items.length; i++) {
-      if (items[i] && items[i].type === 'file' && items[i].path === file.path) { already = true; break; }
+    /* Remove from every group carrying the other status, wherever it sits. */
+    var otherGroups = collectBookmarkGroups(rootItems, otherTitle, []);
+    for (var og = 0; og < otherGroups.length; og++) {
+      removeBookmarkPath(otherGroups[og], file.path);
     }
-    if (!already) items.push({ type: 'file', ctime: Date.now(), path: file.path });
+
+    /* One single bookmark in the first group carrying the target status:
+     * clean every duplicate first, then add. */
+    var target = this.findBookmarkGroup(bk, targetTitle, true);
+    var targetGroups = collectBookmarkGroups(rootItems, targetTitle, []);
+    for (var tg = 0; tg < targetGroups.length; tg++) {
+      removeBookmarkPath(targetGroups[tg], file.path);
+    }
+    (target.items || (target.items = [])).push({ type: 'file', ctime: Date.now(), path: file.path });
 
     if (typeof bk.saveData === 'function') bk.saveData();
     if (typeof bk.trigger === 'function') bk.trigger('changed');
