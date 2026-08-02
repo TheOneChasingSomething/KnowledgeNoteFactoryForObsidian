@@ -124,6 +124,61 @@ function splitChain(str, fallback) {
   return parts.length ? parts : fallback;
 }
 
+/* Obsidian-like [[ suggester attached to a plain text input: typing (with or
+ * without the [[ prefix) pops file suggestions, scoped to a folder when it
+ * exists, otherwise the whole vault. */
+var FileSuggestClass = null;
+if (obsidian.AbstractInputSuggest) {
+  FileSuggestClass = /** @class */ (function (_super) {
+    function FileSuggestClass(app, inputEl, folder, onPick) {
+      var _this = _super.call(this, app, inputEl) || this;
+      _this._app = app;
+      _this._input = inputEl;
+      _this._folder = folder ? obsidian.normalizePath(folder) : '';
+      _this._onPick = onPick || null;
+      return _this;
+    }
+    if (Object.setPrototypeOf) Object.setPrototypeOf(FileSuggestClass, _super);
+    FileSuggestClass.prototype = Object.create(_super.prototype);
+    FileSuggestClass.prototype.constructor = FileSuggestClass;
+
+    FileSuggestClass.prototype.getSuggestions = function (query) {
+      var q = String(query || '')
+        .replace(/^\s*\[\[/, '')
+        .replace(/\]\]\s*$/, '')
+        .toLowerCase();
+      var all = this._app.vault.getMarkdownFiles();
+      var folder = this._folder;
+      var pool = folder
+        ? all.filter(function (f) { return f.path.indexOf(folder + '/') === 0; })
+        : all;
+      if (!pool.length) pool = all; /* fallback: whole vault if the folder does not match */
+      var out = pool.filter(function (f) {
+        return f.basename.toLowerCase().indexOf(q) !== -1;
+      });
+      out.sort(function (a, b) { return b.basename.localeCompare(a.basename); });
+      return out.slice(0, 50);
+    };
+
+    FileSuggestClass.prototype.renderSuggestion = function (file, el) {
+      el.setText(file.basename);
+    };
+
+    FileSuggestClass.prototype.selectSuggestion = function (file) {
+      this._input.value = file.basename;
+      this._input.dispatchEvent(new Event('input'));
+      if (this._onPick) this._onPick(file);
+      this.close();
+    };
+
+    return FileSuggestClass;
+  })(obsidian.AbstractInputSuggest);
+}
+
+function attachFileSuggest(app, inputEl, folder, onPick) {
+  if (FileSuggestClass) new FileSuggestClass(app, inputEl, folder, onPick);
+}
+
 /* Automatic tags: fixed tags + index subject + keywords detected in the content. */
 function buildResourceTags(resourceSettings, indexBase, text) {
   var tags = [];
@@ -317,7 +372,7 @@ var DEFAULT_SETTINGS = {
   defaultProjectType: 'Knowledge',
   resource: {
     inboxFolder: '0_inbox',
-    projectFolder: '1_Projects',
+    projectFolder: '6_Projects',
     template: '',
     trustLevel: '',
     authors: 'ChatGPT, Claude, ClaudeIA, Claude IA, Lumo',
@@ -331,7 +386,7 @@ var DEFAULT_SETTINGS = {
     taskSection: 'Liste des tâches'
   },
   task: {
-    folder: '2_Tasks',
+    folder: '6_Projects',
     template: ''
   },
   types: {
@@ -561,8 +616,8 @@ var CreateResourceModal = /** @class */ (function (_super) {
     _this.url = '';
     _this.task = '';
     _this.trustLevel = plugin.settings.resource.trustLevel;
-    _this.projectPath = '';
-    _this.indexPath = '';
+    _this.projectText = '';
+    _this.indexText = '';
 
     /* If the active note's name is already "Author - Title", prefill. */
     if (_this.activeFile) {
@@ -631,24 +686,24 @@ var CreateResourceModal = /** @class */ (function (_super) {
 
     new obsidian.Setting(contentEl)
       .setName('Project')
-      .setDesc('Project note where the link is inserted (Ressources > LLM)')
-      .addDropdown(function (d) {
-        d.addOption('', '— None —');
-        self.plugin.listNotesIn(self.plugin.settings.resource.projectFolder).forEach(function (f) {
-          d.addOption(f.path, f.basename);
+      .setDesc('Project note where the link is inserted (Ressources > LLM) — type its name or [[…]], suggestions as in Obsidian')
+      .addText(function (t) {
+        t.setPlaceholder('[[project note]]');
+        t.onChange(function (v) { self.projectText = v; });
+        attachFileSuggest(self.app, t.inputEl, self.plugin.settings.resource.projectFolder, function (file) {
+          self.projectText = file.basename;
         });
-        d.onChange(function (v) { self.projectPath = v; });
       });
 
     new obsidian.Setting(contentEl)
       .setName('Knowledge-index')
-      .setDesc('Index note where the link is inserted (LLM)')
-      .addDropdown(function (d) {
-        d.addOption('', '— None —');
-        self.plugin.listNotesIn(self.plugin.settings.types.index.folder).forEach(function (f) {
-          d.addOption(f.path, f.basename);
+      .setDesc('Index note where the link is inserted (LLM) — type its name or [[…]]')
+      .addText(function (t) {
+        t.setPlaceholder('[[index note]]');
+        t.onChange(function (v) { self.indexText = v; });
+        attachFileSuggest(self.app, t.inputEl, self.plugin.settings.types.index.folder, function (file) {
+          self.indexText = file.basename;
         });
-        d.onChange(function (v) { self.indexPath = v; });
       });
 
     new obsidian.Setting(contentEl)
@@ -674,6 +729,14 @@ var CreateResourceModal = /** @class */ (function (_super) {
       new obsidian.Notice('Please enter a title.');
       return;
     }
+    var projFile = this.plugin.resolveNote(this.projectText);
+    if (this.projectText && this.projectText.trim() && !projFile) {
+      new obsidian.Notice('Project note not found: ' + this.projectText);
+    }
+    var idxFile = this.plugin.resolveNote(this.indexText);
+    if (this.indexText && this.indexText.trim() && !idxFile) {
+      new obsidian.Notice('Knowledge-index note not found: ' + this.indexText);
+    }
     var opts = {
       useActive: this.useActive,
       activeFile: this.useActive ? this.activeFile : null,
@@ -682,8 +745,8 @@ var CreateResourceModal = /** @class */ (function (_super) {
       url: this.url,
       task: this.task,
       trustLevel: this.trustLevel,
-      projectPath: this.projectPath,
-      indexPath: this.indexPath
+      projectPath: projFile ? projFile.path : '',
+      indexPath: idxFile ? idxFile.path : ''
     };
     this.close();
     this.plugin.createResource(opts);
@@ -792,7 +855,7 @@ var CreateTaskModal = /** @class */ (function (_super) {
     var _this = _super.call(this, app) || this;
     _this.plugin = plugin;
     _this.title = '';
-    _this.projectPath = '';
+    _this.projectText = '';
     _this.status = plugin.settings.defaultStatus;
     _this.taskType = '';
     return _this;
@@ -821,13 +884,13 @@ var CreateTaskModal = /** @class */ (function (_super) {
 
     new obsidian.Setting(contentEl)
       .setName('Project')
-      .setDesc('The task is linked under the project note (task.project = its short name)')
-      .addDropdown(function (d) {
-        d.addOption('', '— None —');
-        self.plugin.listNotesIn(self.plugin.settings.resource.projectFolder).forEach(function (f) {
-          d.addOption(f.path, f.basename);
+      .setDesc('The task is linked under the project note (task.project = its short name) — type its name or [[…]], suggestions as in Obsidian')
+      .addText(function (t) {
+        t.setPlaceholder('[[202605261545 - ~~ Config IA pour CTF ~~]]');
+        t.onChange(function (v) { self.projectText = v; });
+        attachFileSuggest(self.app, t.inputEl, self.plugin.settings.resource.projectFolder, function (file) {
+          self.projectText = file.basename;
         });
-        d.onChange(function (v) { self.projectPath = v; });
       });
 
     new obsidian.Setting(contentEl).setName('status').addText(function (t) {
@@ -849,9 +912,13 @@ var CreateTaskModal = /** @class */ (function (_super) {
       new obsidian.Notice('Please enter a title.');
       return;
     }
+    var projFile = this.plugin.resolveNote(this.projectText);
+    if (this.projectText && this.projectText.trim() && !projFile) {
+      new obsidian.Notice('Project note not found: ' + this.projectText);
+    }
     var opts = {
       title: this.title.trim(),
-      projectPath: this.projectPath,
+      projectPath: projFile ? projFile.path : '',
       status: this.status || 'Pending',
       type: this.taskType
     };
@@ -962,7 +1029,7 @@ var FactorySettingTab = /** @class */ (function (_super) {
 
     var resFields = [
       ['inboxFolder', 'Inbox folder', 'Folder where resource notes are created or moved'],
-      ['projectFolder', 'Projects folder', 'Folder scanned to list project notes in the modal'],
+      ['projectFolder', 'Projects folder', 'Folder where project notes are created, and used to scope note suggestions'],
       ['template', 'Resource template', 'Template name in the template folder (empty: none)'],
       ['trustLevel', 'Default TrustLevel', 'Initial value of the TrustLevel field'],
       ['authors', 'Suggested authors', 'Comma-separated list, used for input assistance and link grouping'],
@@ -1233,6 +1300,26 @@ var KnowledgeNoteFactory = /** @class */ (function (_super) {
     if (indexFile && s.openIndexAfterCreate) {
       await this.app.workspace.getLeaf(false).openFile(indexFile);
     }
+  };
+
+  /* Resolves "[[Note]]", "[[Note|alias]]" or a bare name to a file, the way
+   * Obsidian resolves link text; falls back to a case-insensitive basename match. */
+  KnowledgeNoteFactory.prototype.resolveNote = function (text) {
+    var t = String(text || '').trim()
+      .replace(/^\[\[/, '')
+      .replace(/\]\]$/, '')
+      .trim();
+    if (!t) return null;
+    var pipe = t.indexOf('|');
+    if (pipe !== -1) t = t.slice(0, pipe).trim();
+    var f = this.app.metadataCache.getFirstLinkpathDest(t, '');
+    if (f) return f;
+    var lower = t.toLowerCase();
+    var files = this.app.vault.getMarkdownFiles();
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].basename.toLowerCase() === lower) return files[i];
+    }
+    return null;
   };
 
   /* Markdown notes of a folder, sorted by descending name (recent ids first). */
