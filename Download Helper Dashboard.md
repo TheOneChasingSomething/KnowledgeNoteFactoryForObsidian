@@ -4,7 +4,7 @@ tags:
   - dashboard
 ---
 
-# 🎬 Dashboard — Download Helper
+# 🎬 Dashboard — Download Helper (vidéos)
 
 > [!info] Prérequis
 > Plugin **Dataview** avec **Enable JavaScript Queries** activé. Les boutons déclenchent les commandes du plugin **Knowledge Note Factory** (téléchargement dans un terminal — desktop uniquement).
@@ -13,19 +13,30 @@ tags:
 /* ============================================================
  * CONFIGURATION
  * ============================================================ */
-const PLUGIN   = "knowledge-note-factory"; // id du plugin (préfixe des commandes)
-const INBOX    = "0_inbox";                // où le script dépose ses notes
-const LIMIT    = 12;                       // notes récentes affichées
-const DL_FIELD = "download";               // champ écrit par le script (chemin ou "KO")
+const PLUGIN     = "knowledge-note-factory"; // id du plugin (préfixe des commandes)
+const INBOX      = "0_inbox";                // où le script dépose ses notes
+const LIMIT      = 12;                        // notes récentes affichées
+const DL_FIELD   = "download";                // champ écrit par le script (chemin ou "KO")
+const VIDEO_TAGS = ["video", "youtube"];      // tags marquant une vidéo (repli)
 
 /* ---- Helpers ---- */
 const run = (id) => app.commands.executeCommandById(PLUGIN + ":" + id);
 const isFail = (v) => String(v).trim().toUpperCase() === "KO";
 
-/* Une note « de téléchargement » possède le champ download. */
-function downloadPages() {
+/* Une note est « vidéo » si son URL pointe vers YouTube, ou à défaut si elle
+ * porte un tag vidéo. Fiable même quand le téléchargement a échoué (KO). */
+function isVideo(p) {
+  const url = String(p.URL ?? p.url ?? "");
+  if (/(?:youtube\.com|youtu\.be)/i.test(url)) return true;
+  const tags = (p.file.tags ?? []).map(t => String(t).toLowerCase().replace(/^#/, ""));
+  return VIDEO_TAGS.some(vt => tags.includes(vt));
+}
+
+/* Notes vidéo créées par le script (champ download présent), plus récentes d'abord. */
+function videoPages() {
   return dv.pages('"' + INBOX + '"')
     .where(p => p[DL_FIELD] !== undefined && p[DL_FIELD] !== null)
+    .where(isVideo)
     .sort(p => p.file.ctime, "desc");
 }
 
@@ -50,9 +61,9 @@ for (const [label, id] of actions) {
 }
 
 /* ============================================================
- * STATISTIQUES
+ * STATISTIQUES (vidéos uniquement)
  * ============================================================ */
-const all    = downloadPages().array();
+const all    = videoPages().array();
 const failed = all.filter(p => isFail(p[DL_FIELD]));
 const okDl   = all.filter(p => !isFail(p[DL_FIELD]));
 
@@ -68,9 +79,9 @@ const big = (label, value, color) => {
   const l = c.createEl("div", { text: label });
   l.style.fontSize = "0.8em"; l.style.opacity = "0.7";
 };
-big("téléchargements", all.length, "var(--text-normal)");
-big("✅ réussis", okDl.length, "#98c379");
-big("❌ échoués", failed.length, failed.length ? "#e06c75" : "var(--text-muted)");
+big("vidéos", all.length, "var(--text-normal)");
+big("✅ réussies", okDl.length, "#98c379");
+big("❌ échouées", failed.length, failed.length ? "#e06c75" : "var(--text-muted)");
 
 /* ============================================================
  * ÉCHECS (download: KO) — à retélécharger
@@ -89,14 +100,14 @@ if (failed.length) {
 }
 
 /* ============================================================
- * TÉLÉCHARGEMENTS RÉCENTS
+ * VIDÉOS RÉCENTES (plus récente en tête)
  * ============================================================ */
-dv.header(2, "🆕 Notes récemment créées");
+dv.header(2, "🆕 Vidéos récemment créées");
 if (all.length === 0) {
-  dv.paragraph("· Aucune note de téléchargement dans " + INBOX + ".");
+  dv.paragraph("· Aucune note vidéo dans " + INBOX + ".");
 } else {
   dv.table(
-    ["Note", "Auteur", "Statut", "Vidéo/fichier"],
+    ["Note", "Auteur", "Statut", "Fichier"],
     all.slice(0, LIMIT).map(p => {
       const v = p[DL_FIELD];
       const status = isFail(v) ? "❌ KO" : "✅ OK";
@@ -114,6 +125,7 @@ if (all.length === 0) {
 
 ## Notes d'utilisation
 
-- **Repérage des notes.** Le dashboard identifie les notes du script par la présence du champ `download` (chemin du fichier téléchargé, ou `KO` en cas d'échec). Ajuste `INBOX`, `DL_FIELD` et `LIMIT` en tête de bloc si besoin.
-- **Boutons.** Ils appellent les commandes du plugin via `app.commands.executeCommandById`. Vérifie que l'identifiant `PLUGIN` correspond bien à celui de ton `manifest.json` (`knowledge-note-factory`).
-- **Échecs.** Les notes `download: KO` sont regroupées en tête pour être relancées (menu interactif → *Re-download known videos*, ou `resources --retry`).
+- **Filtre vidéo.** Le dashboard n'affiche que les notes dont l'URL est une adresse YouTube (`youtube.com` / `youtu.be`), ou à défaut portant un tag `video`/`youtube` (`VIDEO_TAGS`). Ce critère fonctionne aussi pour les téléchargements échoués (`download: KO`), contrairement à l'extension du fichier.
+- **Tri.** Par date de création de la note (`file.ctime`) décroissante — la plus récente en tête. Pour trier plutôt par date de publication de la vidéo, remplace `p.file.ctime` par `p.publication` dans `videoPages()`.
+- **Boutons.** Ils appellent les commandes du plugin via `app.commands.executeCommandById` ; vérifie que `PLUGIN` correspond à l'id de ton `manifest.json`.
+- **Échecs.** Les notes `download: KO` sont regroupées en tête pour être relancées.
