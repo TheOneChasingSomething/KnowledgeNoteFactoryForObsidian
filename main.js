@@ -599,7 +599,7 @@ function insertIntoSection(content, bullet, chain, author) {
 }
 
 var DEFAULT_SETTINGS = {
-  templateFolder: 'Ressources/Templates',
+  templateFolder: 'Resources/Templates',
   idFormat: 'YYYYMMDDHHmm',
   dateFormat: 'YYYY-MM-DD',
   openIndexAfterCreate: true,
@@ -629,7 +629,7 @@ var DEFAULT_SETTINGS = {
     template: ''
   },
   init: {
-    extraFolders: '2_References, 4_Permanent, 5_Knowledges, 6_Projects, Ressources/Images',
+    extraFolders: '2_References, 4_Permanent, 5_Knowledges, 6_Projects, Resources/Images',
     extraGroups: '0 - DashBoard, 1 - Knowledge'
   },
   normalize: {
