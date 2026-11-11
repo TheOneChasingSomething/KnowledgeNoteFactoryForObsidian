@@ -1,0 +1,88 @@
+{
+  "templateFolder": "Resources/Templates",
+  "idFormat": "YYYYMMDDHHmm",
+  "dateFormat": "YYYY-MM-DD",
+  "openIndexAfterCreate": true,
+  "sanitizeFileNames": false,
+  "defaultParent": "None",
+  "defaultStatus": "Pending",
+  "defaultProjectType": "Knowledge",
+  "resource": {
+    "inboxFolder": "0_inbox",
+    "projectFolder": "6_Projects",
+    "template": "Resources/Templates/resource-note_template",
+    "trustLevel": "-2",
+    "authors": "ChatGPT, Claude, ClaudeIA, Claude IA, Lumo",
+    "projectChain": "Ressources > LLM",
+    "indexChain": "LLM",
+    "keywords": "Git, GitHub, GitLab, TLS, HTTPS, SSH, MITM, CTF, Docker, Python, JavaScript, V8, Linux, Obsidian",
+    "fixedTags": "literature-note, resource-note"
+  },
+  "project": {
+    "template": "Resources/Templates/project-note_template",
+    "taskSection": "Liste des tâches",
+    "pendingGroup": "4 - InProgress",
+    "pauseGroup": "3 - OnHold"
+  },
+  "task": {
+    "folder": "6_Projects",
+    "template": "Resources/Templates/task-note_template"
+  },
+  "init": {
+    "extraFolders": "2_References, 4_Permanent, 5_Knowledges, 6_Projects, Resources/Images",
+    "extraGroups": "0 - DashBoard, 1 - Knowledge"
+  },
+  "normalize": {
+    "types": "Coding, VibeCoding, Challenge, Research, Knowledge, Config, Tooling",
+    "tagMap": "ressource=resource, ressources=resources, ressource-note=resource-note, ressources-note=resources-note",
+    "tagRemove": "resource, resources-note"
+  },
+  "video": {
+    "workdir": "",
+    "baseCommand": "source venv/bin/activate && python3 main.py",
+    "secretsFile": "",
+    "installCommand": "python3 -m venv venv 2>/dev/null; source venv/bin/activate && (python3 -c \"import yt_dlp, keyring, typer\" 2>/dev/null && echo \"Dependencies already installed.\" || (echo \"Installing dependencies…\" && pip install -e .))",
+    "secretsSetupCommand": "source venv/bin/activate && python3 -c \"import keyring,glob,os; f=glob.glob('client_secrets*.json'); (keyring.set_password('yt_playlist_dl','client_secrets',open(f[0]).read()) or print('Stored in keyring:',f[0])) if f else print('client_secrets*.json introuvable dans',os.getcwd())\"",
+    "shell": "bash",
+    "terminalPreset": "gnome-terminal",
+    "terminalBin": "",
+    "terminalArgs": "",
+    "keepOpen": true,
+    "passVault": true,
+    "flagProject": "--project",
+    "flagIndex": "--knowledge-index",
+    "flagVault": "--vault"
+  },
+  "types": {
+    "index": {
+      "folder": "5_Knowledges/0 - Index",
+      "template": "index-note_template",
+      "enabled": true
+    },
+    "flashcard": {
+      "folder": "5_Knowledges/1 - Flashcard",
+      "template": "flashcard_template",
+      "enabled": true
+    },
+    "cheatsheet": {
+      "folder": "5_Knowledges/2 - CheatSheet",
+      "template": "cheatsheet-note_template",
+      "enabled": true
+    },
+    "gist": {
+      "folder": "5_Knowledges/3 - Gist",
+      "template": "gist_template",
+      "enabled": true
+    },
+    "slides": {
+      "folder": "5_Knowledges/5 - Slides",
+      "template": "permanent-note_template",
+      "enabled": true
+    },
+    "groom": {
+      "folder": "5_Knowledges/6 - Groom",
+      "template": "permanent-note_template",
+      "enabled": true
+    }
+  }
+}

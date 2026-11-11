@@ -146,17 +146,16 @@ function splitChain(str, fallback) {
 var FileSuggestClass = null;
 if (obsidian.AbstractInputSuggest) {
   FileSuggestClass = /** @class */ (function (_super) {
-    function FileSuggestClass(app, inputEl, folder, onPick) {
-      var _this = _super.call(this, app, inputEl) || this;
-      _this._app = app;
-      _this._input = inputEl;
-      _this._folder = folder ? obsidian.normalizePath(folder) : '';
-      _this._onPick = onPick || null;
-      return _this;
+    class FileSuggestClass extends _super {
+      constructor(app, inputEl, folder, onPick) {
+        super(app, inputEl);
+        var _this = this;
+        _this._app = app;
+        _this._input = inputEl;
+        _this._folder = folder ? obsidian.normalizePath(folder) : '';
+        _this._onPick = onPick || null;
+      }
     }
-    if (Object.setPrototypeOf) Object.setPrototypeOf(FileSuggestClass, _super);
-    FileSuggestClass.prototype = Object.create(_super.prototype);
-    FileSuggestClass.prototype.constructor = FileSuggestClass;
 
     FileSuggestClass.prototype.getSuggestions = function (query) {
       var q = String(query || '')
@@ -776,22 +775,21 @@ function renderNote(type, templateContent, ctx) {
 /* ------------------------------------------------------------------ */
 
 var CreateKnowledgeModal = /** @class */ (function (_super) {
-  function CreateKnowledgeModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.name = '';
-    _this.parent = plugin.settings.defaultParent;
-    _this.status = plugin.settings.defaultStatus;
-    _this.projectType = plugin.settings.defaultProjectType;
-    _this.types = {};
-    TYPES.forEach(function (t) {
-      _this.types[t] = plugin.settings.types[t].enabled;
-    });
-    return _this;
+  class CreateKnowledgeModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.name = '';
+      _this.parent = plugin.settings.defaultParent;
+      _this.status = plugin.settings.defaultStatus;
+      _this.projectType = plugin.settings.defaultProjectType;
+      _this.types = {};
+      TYPES.forEach(function (t) {
+        _this.types[t] = plugin.settings.types[t].enabled;
+      });
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(CreateKnowledgeModal, _super);
-  CreateKnowledgeModal.prototype = Object.create(_super.prototype);
-  CreateKnowledgeModal.prototype.constructor = CreateKnowledgeModal;
 
   CreateKnowledgeModal.prototype.onOpen = function () {
     var self = this;
@@ -867,39 +865,38 @@ var CreateKnowledgeModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var CreateResourceModal = /** @class */ (function (_super) {
-  function CreateResourceModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-
-    var active = app.workspace.getActiveFile();
-    _this.activeFile = active && active.extension === 'md' ? active : null;
-    _this.useActive = !!_this.activeFile;
-
-    _this.author = '';
-    _this.title = _this.activeFile ? _this.activeFile.basename : '';
-    _this.url = '';
-    _this.task = '';
-    _this.trustLevel = plugin.settings.resource.trustLevel;
-    _this.projectText = '';
-    _this.indexText = '';
-
-    /* If the active note's name is already "Author - Title", prefill. */
-    if (_this.activeFile) {
-      var base = _this.activeFile.basename;
-      var authors = splitCsv(plugin.settings.resource.authors);
-      for (var i = 0; i < authors.length; i++) {
-        if (base.toLowerCase().indexOf(authors[i].toLowerCase() + ' - ') === 0) {
-          _this.author = base.slice(0, authors[i].length);
-          _this.title = base.slice(authors[i].length + 3);
-          break;
+  class CreateResourceModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+  
+      var active = app.workspace.getActiveFile();
+      _this.activeFile = active && active.extension === 'md' ? active : null;
+      _this.useActive = !!_this.activeFile;
+  
+      _this.author = '';
+      _this.title = _this.activeFile ? _this.activeFile.basename : '';
+      _this.url = '';
+      _this.task = '';
+      _this.trustLevel = plugin.settings.resource.trustLevel;
+      _this.projectText = '';
+      _this.indexText = '';
+  
+      /* If the active note's name is already "Author - Title", prefill. */
+      if (_this.activeFile) {
+        var base = _this.activeFile.basename;
+        var authors = splitCsv(plugin.settings.resource.authors);
+        for (var i = 0; i < authors.length; i++) {
+          if (base.toLowerCase().indexOf(authors[i].toLowerCase() + ' - ') === 0) {
+            _this.author = base.slice(0, authors[i].length);
+            _this.title = base.slice(authors[i].length + 3);
+            break;
+          }
         }
       }
     }
-    return _this;
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(CreateResourceModal, _super);
-  CreateResourceModal.prototype = Object.create(_super.prototype);
-  CreateResourceModal.prototype.constructor = CreateResourceModal;
 
   CreateResourceModal.prototype.onOpen = function () {
     var self = this;
@@ -1028,19 +1025,18 @@ var CreateResourceModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var CreateProjectModal = /** @class */ (function (_super) {
-  function CreateProjectModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.title = '';
-    _this.shortName = '';
-    _this.parent = plugin.settings.defaultParent;
-    _this.status = plugin.settings.defaultStatus;
-    _this.projectType = '';
-    return _this;
+  class CreateProjectModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.title = '';
+      _this.shortName = '';
+      _this.parent = plugin.settings.defaultParent;
+      _this.status = plugin.settings.defaultStatus;
+      _this.projectType = '';
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(CreateProjectModal, _super);
-  CreateProjectModal.prototype = Object.create(_super.prototype);
-  CreateProjectModal.prototype.constructor = CreateProjectModal;
 
   CreateProjectModal.prototype.onOpen = function () {
     var self = this;
@@ -1115,18 +1111,17 @@ var CreateProjectModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var CreateTaskModal = /** @class */ (function (_super) {
-  function CreateTaskModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.title = '';
-    _this.projectText = '';
-    _this.status = plugin.settings.defaultStatus;
-    _this.taskType = '';
-    return _this;
+  class CreateTaskModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.title = '';
+      _this.projectText = '';
+      _this.status = plugin.settings.defaultStatus;
+      _this.taskType = '';
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(CreateTaskModal, _super);
-  CreateTaskModal.prototype = Object.create(_super.prototype);
-  CreateTaskModal.prototype.constructor = CreateTaskModal;
 
   CreateTaskModal.prototype.onOpen = function () {
     var self = this;
@@ -1202,29 +1197,28 @@ var CreateTaskModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var ProjectStatusModal = /** @class */ (function (_super) {
-  function ProjectStatusModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.status = 'Pending';
-    _this.projectText = '';
-
-    /* Prefill with the active note when it looks like a project or task. */
-    var active = app.workspace.getActiveFile();
-    if (active && active.extension === 'md') {
-      var pFolder = obsidian.normalizePath(plugin.settings.resource.projectFolder || '');
-      var tFolder = obsidian.normalizePath(plugin.settings.task.folder || '');
-      var cache = app.metadataCache.getFileCache(active);
-      var fm = cache && cache.frontmatter;
-      var looksRight = (pFolder && active.path.indexOf(pFolder + '/') === 0) ||
-        (tFolder && active.path.indexOf(tFolder + '/') === 0) ||
-        (fm && (fm.project || fm.task));
-      if (looksRight) _this.projectText = active.basename;
+  class ProjectStatusModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.status = 'Pending';
+      _this.projectText = '';
+  
+      /* Prefill with the active note when it looks like a project or task. */
+      var active = app.workspace.getActiveFile();
+      if (active && active.extension === 'md') {
+        var pFolder = obsidian.normalizePath(plugin.settings.resource.projectFolder || '');
+        var tFolder = obsidian.normalizePath(plugin.settings.task.folder || '');
+        var cache = app.metadataCache.getFileCache(active);
+        var fm = cache && cache.frontmatter;
+        var looksRight = (pFolder && active.path.indexOf(pFolder + '/') === 0) ||
+          (tFolder && active.path.indexOf(tFolder + '/') === 0) ||
+          (fm && (fm.project || fm.task));
+        if (looksRight) _this.projectText = active.basename;
+      }
     }
-    return _this;
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(ProjectStatusModal, _super);
-  ProjectStatusModal.prototype = Object.create(_super.prototype);
-  ProjectStatusModal.prototype.constructor = ProjectStatusModal;
 
   ProjectStatusModal.prototype.onOpen = function () {
     var self = this;
@@ -1282,15 +1276,14 @@ var ProjectStatusModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var NormalizeModal = /** @class */ (function (_super) {
-  function NormalizeModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.running = false;
-    return _this;
+  class NormalizeModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.running = false;
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(NormalizeModal, _super);
-  NormalizeModal.prototype = Object.create(_super.prototype);
-  NormalizeModal.prototype.constructor = NormalizeModal;
 
   NormalizeModal.prototype.onOpen = function () {
     var self = this;
@@ -1359,18 +1352,17 @@ var NormalizeModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var VideoDownloadModal = /** @class */ (function (_super) {
-  function VideoDownloadModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.url = '';
-    _this.kind = 'auto';
-    _this.projectText = '';
-    _this.indexText = '';
-    return _this;
+  class VideoDownloadModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.url = '';
+      _this.kind = 'auto';
+      _this.projectText = '';
+      _this.indexText = '';
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(VideoDownloadModal, _super);
-  VideoDownloadModal.prototype = Object.create(_super.prototype);
-  VideoDownloadModal.prototype.constructor = VideoDownloadModal;
 
   VideoDownloadModal.prototype.onOpen = async function () {
     var self = this;
@@ -1478,15 +1470,14 @@ var VideoDownloadModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var VideoRunModal = /** @class */ (function (_super) {
-  function VideoRunModal(app, plugin) {
-    var _this = _super.call(this, app) || this;
-    _this.plugin = plugin;
-    _this.args = '';
-    return _this;
+  class VideoRunModal extends _super {
+    constructor(app, plugin) {
+      super(app);
+      var _this = this;
+      _this.plugin = plugin;
+      _this.args = '';
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(VideoRunModal, _super);
-  VideoRunModal.prototype = Object.create(_super.prototype);
-  VideoRunModal.prototype.constructor = VideoRunModal;
 
   VideoRunModal.prototype.onOpen = function () {
     var self = this;
@@ -1532,14 +1523,13 @@ var VideoRunModal = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var FactorySettingTab = /** @class */ (function (_super) {
-  function FactorySettingTab(app, plugin) {
-    var _this = _super.call(this, app, plugin) || this;
-    _this.plugin = plugin;
-    return _this;
+  class FactorySettingTab extends _super {
+    constructor(app, plugin) {
+      super(app, plugin);
+      var _this = this;
+      _this.plugin = plugin;
+    }
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(FactorySettingTab, _super);
-  FactorySettingTab.prototype = Object.create(_super.prototype);
-  FactorySettingTab.prototype.constructor = FactorySettingTab;
 
   FactorySettingTab.prototype.display = function () {
     var self = this;
@@ -1920,12 +1910,8 @@ var FactorySettingTab = /** @class */ (function (_super) {
 /* ------------------------------------------------------------------ */
 
 var KnowledgeNoteFactory = /** @class */ (function (_super) {
-  function KnowledgeNoteFactory() {
-    return (_super !== null && _super.apply(this, arguments)) || this;
+  class KnowledgeNoteFactory extends _super {
   }
-  if (Object.setPrototypeOf) Object.setPrototypeOf(KnowledgeNoteFactory, _super);
-  KnowledgeNoteFactory.prototype = Object.create(_super.prototype);
-  KnowledgeNoteFactory.prototype.constructor = KnowledgeNoteFactory;
 
   KnowledgeNoteFactory.prototype.onload = async function () {
     await this.loadSettings();
